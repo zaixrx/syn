@@ -15,6 +15,38 @@ struct Compiler {
     src: String,
 }
 
+enum Token {
+    Num(f64),
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    LeftParen,
+    RightParent,
+}
+
+impl Token {
+    fn get_precedance(&self) -> i32 {
+        match self {
+            Token::Plus => 0,
+            Token::Minus => 0,
+            Token::Star => 1,
+            Token::Slash => 1,
+            _ => -1,
+        }
+    }
+    fn get_instruction(&self) -> Option<Inst> {
+        match self {
+            Token::Num(num) => Some(Inst::PUSH(*num)),
+            Token::Plus => Some(Inst::ADD),
+            Token::Minus => Some(Inst::SUB),
+            Token::Star => Some(Inst::MUL),
+            Token::Slash => Some(Inst::DIV),
+            _ => None,
+        }
+    }
+}
+
 impl Compiler {
     fn new(src: String) -> Compiler {
         return Compiler {
@@ -42,7 +74,7 @@ impl Compiler {
         }
     }
     
-    fn emit_inst(&mut self) -> Option<Inst> {
+    fn parse_token(&mut self) -> Option<Token> {
         self.start = self.curr;
         if self.peek_char().is_none() {
             return None;
@@ -51,64 +83,66 @@ impl Compiler {
         if c.is_digit(10) {
             self.consume_number();
             return match self.src[self.start..self.curr].parse::<f64>() {
-                Ok(num) => Some(Inst::PUSH(num)),
+                Ok(num) => Some(Token::Num(num)),
                 Err(why) => panic!("failed parsing number: {}", why),
             };
         }
         self.consume_char();
         match c {
-            '+' => Some(Inst::ADD),
-            '-' => Some(Inst::SUB),
-            '*' => Some(Inst::MUL),
-            '/' => Some(Inst::DIV),
-            ' ' => self.emit_inst(),
+            '+' => Some(Token::Plus),
+            '-' => Some(Token::Minus),
+            '*' => Some(Token::Star),
+            '/' => Some(Token::Slash),
+            '(' => Some(Token::LeftParen),
+            ')' => Some(Token::RightParent),
+            ' ' => self.parse_token(),
             _ => None,
+        }
+    }
+
+    fn parse(&mut self, dest: &mut Vec<Inst>) {
+        let mut stack = Vec::<Token>::new();
+        loop {
+            match self.parse_token() {
+                Some(tok) => {
+                    match tok {
+                        Token::Num(num) => {
+                            dest.push(Inst::PUSH(num));
+                        },
+                        Token::LeftParen => {
+                            self.parse(dest);
+                        },
+                        Token::RightParent => {
+                            while !stack.is_empty() {
+                                    dest.push(stack.pop().unwrap().get_instruction().unwrap());
+                            }
+                            return;
+                        },
+                        _ => {
+                            let pr = tok.get_precedance();
+                            assert_ne!(pr, -1); // must be an operator
+                            if stack.is_empty() {
+                                stack.push(tok);
+                                continue;
+                            }
+                            while !stack.is_empty() && stack.last().unwrap().get_precedance() >= pr {
+                                dest.push(stack.pop().unwrap().get_instruction().unwrap());
+                            }
+                            stack.push(tok);
+                        }
+                    }
+                },
+                None => break,
+            };
+        }
+        while !stack.is_empty() {
+                dest.push(stack.pop().unwrap().get_instruction().unwrap());
         }
     }
 }
 
-fn get_operator_precedance(src: &Inst) -> i32 {
-    match src {
-        Inst::DIV => 1,
-        Inst::MUL => 1,
-        Inst::SUB => 0,
-        Inst::ADD => 0,
-        _ => -1,
-    }
-}
-
-fn infix_to_postfix(src: Vec<Inst>) -> Vec<Inst> {
-    let mut dest = Vec::<Inst>::new();
-    let mut stack = Vec::<Inst>::new();
-    for i in 0..src.len() {
-        let inst: Inst = *src.get(i).unwrap();
-        match inst {
-            Inst::PUSH(_) => {
-                dest.push(inst);
-            },
-            _ => {
-                let pr = get_operator_precedance(&inst);
-                assert_ne!(pr, -1);
-                if stack.is_empty() {
-                    stack.push(inst);
-                    continue;
-                }
-                while !stack.is_empty() && get_operator_precedance(stack.last().unwrap()) >= pr {
-                    dest.push(stack.pop().unwrap());
-                }
-                stack.push(inst);
-            }
-        };
-    }
-    while !stack.is_empty() {
-        dest.push(stack.pop().unwrap());
-    }
-    print_program(&dest);
-    return dest;
-}
-
 fn print_program(program: &Vec<Inst>) {
-    println!("--- PROGRAM_START ---");
+    println!("--- PROGRAM_StarT ---");
     for i in 0..program.len() {
         println!("{}: {:?}", i, program.get(i).unwrap());
     }
@@ -136,20 +170,13 @@ fn main() {
             Ok(size) => print!("{} ({} bytes) contains:\n{}", display, size, src),
         };
     }
-
-    let mut program = Vec::<Inst>::new();
+    
     let mut compiler = Compiler::new(src);
-    loop {
-        match compiler.emit_inst() {
-            Some(inst) => {
-                program.push(inst);
-            },
-            None => break,
-        };
-    }
-
-    program = infix_to_postfix(program);
+    let mut program = Vec::<Inst>::new();
+    compiler.parse(&mut program);
     program.push(Inst::PRINT);
+
+    print_program(&program);
 
     match exec(&program) {
         Err(msg) => {
