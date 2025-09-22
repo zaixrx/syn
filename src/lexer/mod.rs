@@ -13,6 +13,8 @@ pub struct TokenHeader {
 
 #[derive(Debug, PartialEq)]
 pub enum Token {
+    LeftParen,
+    RightParen,
     LeftBrace,
 	RightBrace,
     Colon,
@@ -23,7 +25,14 @@ pub enum Token {
 	Plus,
 	Star,
 
+    Bang,
+    BangEqual,
     Equal,
+    EqualEqual,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
 	Deq,
 
 	While,
@@ -51,9 +60,9 @@ impl Lexer {
     }
 
     // TODO: u64 -> f64
-    fn consume_number(&mut self) -> i64 {
+    fn consume_integer(&mut self) -> i64 {
         self.curr = match self.src[self.curr..].find(|c: char| !c.is_ascii_digit()) {
-            Some(end) => end,
+            Some(end) => self.curr + end,
             None => self.src.len()
         };
         self.src[self.start..self.curr].parse::<i64>().unwrap()
@@ -61,7 +70,7 @@ impl Lexer {
 
     fn consume_id(&mut self) -> String {
         self.curr = match self.src[self.curr..].find(|c: char| !c.is_ascii_alphanumeric()) {
-            Some(end) => end,
+            Some(end) => self.curr + end,
             None => self.src.len()
         };
         String::from(&self.src[self.start..self.curr])
@@ -70,7 +79,7 @@ impl Lexer {
     fn consume_string(&mut self) -> Result<String, &'static str> {
         match self.src[self.curr+1..].find('"') {
             Some(end) => {
-                self.curr = end + 1;
+                self.curr += end + 2;
                 Ok(String::from(&self.src[self.start..self.curr]))
             },
             None => Err("type String should end with \"")
@@ -85,9 +94,10 @@ impl Lexer {
                     self.curr += 1;
                     if c == '\n' {
                         self.line += 1;
-                    } else if c != ' ' {
+                    } else if c != ' ' && c != '\r' {
                         return Some(c);
                     }
+                    self.start = self.curr;
                 },
                 None => return None,
             };
@@ -116,6 +126,8 @@ impl Lexer {
             })
         };
         let tok = match c {
+            '(' => Token::LeftParen,
+            ')' => Token::RightParen,
             '{' => Token::LeftBrace,
             '}' => Token::RightBrace,
             ';' => Token::SemiColon,
@@ -123,7 +135,34 @@ impl Lexer {
             '/' => Token::Slash,
             '+' => Token::Plus,
             '*' => Token::Star,
-            '=' => Token::Equal,
+            '=' => {
+                if self.expect_char('=') {
+                    Token::EqualEqual
+                } else {
+                    Token::Equal
+                }
+            },
+            '!' => {
+                if self.expect_char('=') {
+                    Token::BangEqual
+                } else {
+                    Token::Bang
+                }
+            },
+            '<' => {
+                if self.expect_char('=') {
+                    Token::LessEqual
+                } else {
+                    Token::Less
+                }
+            },
+            '>' => {
+                if self.expect_char('=') {
+                    Token::GreaterEqual
+                } else {
+                    Token::Greater
+                }
+            },
             ':' => {
                 if self.expect_char('=') {
                     Token::Deq
@@ -133,7 +172,7 @@ impl Lexer {
             }
             c if c.is_ascii_digit() => {
                 self.curr -= 1;
-                Token::LiteralInt(self.consume_number())
+                Token::LiteralInt(self.consume_integer())
             },
             '"' => {
                 self.curr -= 1;
@@ -169,6 +208,7 @@ impl Lexer {
             if tok.val == Token::EOF {
                 break;
             }
+            dbg!(&tok);
             toks.push(tok);
         }
         Ok(toks)
