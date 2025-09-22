@@ -1,4 +1,7 @@
 mod lexer;
+use lexer::{
+    Lexer,
+};
 
 use std::fs;
 use std::env;
@@ -27,4 +30,12 @@ fn main() {
         eprintln!("Failed reading file: {}", err);
         process::exit(69)
     });
+
+    let mut lexer = Lexer::new(src);
+    let toks = lexer.get_tokens().unwrap_or_else(|err| {
+        eprintln!("Failed parsing file: {}", err);
+        process::exit(69)
+    });
+
+    dbg!(toks);
 }
