@@ -1,7 +1,7 @@
 mod lexer;
-use lexer::{
-    Lexer,
-};
+mod compiler;
+
+use compiler::Compiler;
 
 use std::fs;
 use std::env;
@@ -31,11 +31,9 @@ fn main() {
         process::exit(69)
     });
 
-    let mut lexer = Lexer::new(src);
-    let toks = lexer.get_tokens().unwrap_or_else(|err| {
-        eprintln!("Failed parsing file: {}", err);
+    let mut compiler = Compiler::new(src);
+    compiler.compile().unwrap_or_else(|err| {
+        eprintln!("Failed generating bytecode {}", err);
         process::exit(69)
     });
-
-    dbg!(toks);
 }

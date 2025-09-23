@@ -7,8 +7,8 @@ pub struct Lexer {
 
 #[derive(Debug)]
 pub struct TokenHeader {
-    val: Token,
-    pos: usize,
+    pub val: Token,
+    pub _pos: usize,
 }
 
 #[derive(Debug, PartialEq)]
@@ -94,7 +94,7 @@ impl Lexer {
                     self.curr += 1;
                     if c == '\n' {
                         self.line += 1;
-                    } else if c != ' ' && c != '\r' {
+                    } else if c != ' ' && c != '\r' && c != '\t' {
                         return Some(c);
                     }
                     self.start = self.curr;
@@ -116,13 +116,13 @@ impl Lexer {
         }
     }
 
-    pub fn emit_token(&mut self) -> Result<TokenHeader, &'static str> {
+    pub fn next(&mut self) -> Result<TokenHeader, &'static str> {
         self.start = self.curr;
         let c = match self.consume_char() {
             Some(c) => c,
             None => return Ok(TokenHeader {
                 val: Token::EOF,
-                pos: self.start,
+                _pos: self.start,
             })
         };
         let tok = match c {
@@ -196,21 +196,14 @@ impl Lexer {
         };
         Ok(TokenHeader {
             val: tok,
-            pos: self.start,
+            _pos: self.start,
         })
     }
-    
-    // TODO: return an iterator
-    pub fn get_tokens(&mut self) -> Result<Vec<TokenHeader>, &'static str> {
-        let mut toks = Vec::new();
-        loop {
-            let tok = self.emit_token()?;
-            if tok.val == Token::EOF {
-                break;
-            }
-            dbg!(&tok);
-            toks.push(tok);
-        }
-        Ok(toks)
+
+    pub fn peak(&mut self) -> Result<TokenHeader, &'static str> {
+        let (start, curr) = (self.start, self.curr);
+        let tok = self.next()?;
+        self.start = start; self.curr = curr;
+        Ok(tok)
     }
 }
