@@ -1,5 +1,6 @@
 mod lexer;
 mod compiler;
+mod vm;
 
 use compiler::Compiler;
 
@@ -32,8 +33,13 @@ fn main() {
     });
 
     let mut compiler = Compiler::new(src);
-    compiler.compile().unwrap_or_else(|err| {
-        eprintln!("Failed generating bytecode {}", err);
+    let prog = compiler.compile().unwrap_or_else(|err| {
+        eprintln!("Failed generating bytecode: {}", err);
+        process::exit(69)
+    });
+
+    vm::exec(prog).unwrap_or_else(|err| {
+        eprintln!("Failed executing bytecode: {}", err);
         process::exit(69)
     });
 }

@@ -1,7 +1,6 @@
 # Syn Programming Language
 
-syn (the spelling of the letter 'س' in arabic)
-is a hobby programming language
+sen (c in arabic) is a hobby programming language
 
 # Resources
 

@@ -33,7 +33,6 @@ pub enum Token {
     LessEqual,
     Greater,
     GreaterEqual,
-	Deq,
 
 	While,
     Break,
@@ -163,13 +162,7 @@ impl Lexer {
                     Token::Greater
                 }
             },
-            ':' => {
-                if self.expect_char('=') {
-                    Token::Deq
-                } else {
-                    Token::Colon
-                }
-            }
+            ':' => Token::Colon,
             c if c.is_ascii_digit() => {
                 self.curr -= 1;
                 Token::LiteralInt(self.consume_integer())
@@ -186,7 +179,7 @@ impl Lexer {
                     "while" => Token::While,
                     "break" => Token::Break,
                     "continue" => Token::Continue,
-                    "print "=> Token::Print,
+                    "print" => Token::Print,
                     "int" => Token::TypeInteger,
                     "string" => Token::TypeString,
                     _ => Token::Identifer(id)
@@ -205,5 +198,16 @@ impl Lexer {
         let tok = self.next()?;
         self.start = start; self.curr = curr;
         Ok(tok)
+    }
+
+    pub fn had(&mut self, what: Token) -> Result<bool, &'static str> {
+        let (start, curr) = (self.start, self.curr);
+        let tok = self.next()?;
+        if tok.val == what {
+            Ok(true)
+        } else {
+            self.start = start; self.curr = curr;
+            Ok(false)
+        }
     }
 }
