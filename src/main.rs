@@ -27,12 +27,12 @@ fn main() {
         process::exit(69)
     });
 
-    let src = fs::read_to_string(args.filepath).unwrap_or_else(|err| {
+    let src = fs::read_to_string(&args.filepath).unwrap_or_else(|err| {
         eprintln!("Failed reading file: {}", err);
         process::exit(69)
     });
 
-    let mut compiler = Compiler::new(src);
+    let mut compiler = Compiler::new(args.filepath, src);
     let prog = compiler.compile().unwrap_or_else(|err| {
         eprintln!("Failed generating bytecode: {}", err);
         process::exit(69)

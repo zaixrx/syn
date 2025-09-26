@@ -1,6 +1,9 @@
+use std::error::Error;
+
 use crate::lexer::{
     Lexer,
-    Token
+    Token,
+    TokenHeader
 };
 
 use crate::vm::{
@@ -26,22 +29,49 @@ enum Operator {
     Nql,
 }
 
+
+#[derive(Debug)]
+pub struct CompilerError {
+    token: TokenHeader,
+    message: String,
+}
+
+impl CompilerError {
+    pub fn new(message: String, token: TokenHeader) -> CompilerError {
+        CompilerError {
+            token,
+            message,
+        }
+    }
+}
+
+impl std::fmt::Display for CompilerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "at {}-{}: {}, got token {:?}", self.token.line, self.token.pos, self.message, self.token.val)
+    }
+}
+
+impl std::error::Error for CompilerError {}
+
 impl Compiler {
-    pub fn new(src: String) -> Compiler {
+    pub fn new(filename: String, src: String) -> Compiler {
         Compiler {
-            lexer: Lexer::new(src),
+            lexer: Lexer::new(filename, src),
             insts: Vec::new()
         }
     }
 
-    pub fn compile(&mut self) -> Result<Vec<Inst>, &'static str>{
-        if self.lexer.had(Token::Print)? {
-            self.expr(0)?;
-            self.insts.push(Inst::Print);
-            println!("Print");
-        } else {
-            return Err("statement require")
-        }
+    pub fn compile(&mut self) -> Result<Vec<Inst>, Box<dyn Error>> {
+        let tok = self.lexer.next()?;
+        match tok.val {
+            Token::Print => {
+                self.insts.push(Inst::Print);
+                self.expr(0)?;
+            },
+            _ => return Err(Box::new(
+                CompilerError::new(String::from("unsupported statement"), tok)
+            ))
+        };
         Ok(self.insts.clone())
     }
 
@@ -55,31 +85,35 @@ impl Compiler {
         }
     }
 
-    pub fn expr(&mut self, min_bp: u8) -> Result<(), &'static str> {
-        match self.lexer.next()?.val {
+    pub fn expr(&mut self, min_bp: u8) -> Result<(), Box<dyn Error>> {
+        let tok = self.lexer.next()?;
+        match tok.val {
             Token::LiteralInt(val) => {
-                println!("PUSH {}", val);
                 self.insts.push(Inst::PushInt(val));
             },
-            Token::LiteralString(val) => {
-                println!("STORE {}", val);
+            Token::LiteralString(_val) => {
                 todo!("STORE type_string");
             },
-            Token::Identifer(id) => {
-                println!("LOAD {}", id);
+            Token::Identifer(_id) => {
                 todo!("LOAD identifier");
             },
-            _ => return Err("unexpected token")
+            _ => return Err(Box::new(
+                CompilerError::new(String::from("unsupported expression"), tok)
+            ))
         };
 
         loop {
-            let op = match self.lexer.peak()?.val {
+            let tok = self.lexer.peak()?;
+
+            let op = match tok.val {
                 Token::Minus => Operator::Sub,
                 Token::Slash => Operator::Div,
                 Token::Plus => Operator::Add,
                 Token::Star => Operator::Mul,
                 Token::EOF => return Ok(()),
-                _ => return Err("unexpected token got operator")
+                _ => return Err(Box::new(
+                    CompilerError::new(String::from("unsupported operator"), tok)
+                ))
             };
 
             let (l_bp, r_bp) = self.infix_binding_power(&op);
@@ -92,38 +126,34 @@ impl Compiler {
 
             match op {
                 Operator::Sub => {
-                    println!("Sub");
                     self.insts.push(Inst::Sub);
                 },
                 Operator::Div => {
-                    println!("Div");
                     self.insts.push(Inst::Div);
                 },
                 Operator::Add => {
-                    println!("Add");
                     self.insts.push(Inst::Add);
                 },
                 Operator::Mul => {
-                    println!("Mul");
                     self.insts.push(Inst::Mul);
                 },
                 Operator::Eql => {
-                    println!("Eql");
+                    todo!("Eql")
                 },
                 Operator::Nql => {
-                    println!("Nql");
+                    todo!("Nql")
                 },
                 Operator::Les => {
-                    println!("Les");
+                    todo!("Less")
                 },
                 Operator::Lse => {
-                    println!("Lse");
+                    todo!("Lse")
                 },
                 Operator::Grt => {
-                    println!("Grt");
+                    todo!("Grt")
                 },
                 Operator::Gte => {
-                    println!("Gte");
+                    todo!("Gte")
                 },
             };
         }

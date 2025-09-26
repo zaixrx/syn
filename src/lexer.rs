@@ -1,14 +1,17 @@
+#[derive(Debug)]
 pub struct Lexer {
     src: String,
     curr: usize,
     start: usize,
     line: usize,
+    filename: String,
 }
 
 #[derive(Debug)]
 pub struct TokenHeader {
     pub val: Token,
-    pub _pos: usize,
+    pub pos: usize,
+    pub line: usize,
 }
 
 #[derive(Debug, PartialEq)]
@@ -48,10 +51,38 @@ pub enum Token {
     EOF,
 }
 
+#[derive(Debug)]
+pub struct LexerError {
+    filename: String,
+    line: usize,
+    pos: usize,
+    message: String,
+}
+
+impl LexerError {
+    pub fn new(message: String, lexer: &Lexer) -> LexerError {
+        LexerError {
+            filename: lexer.filename.clone(), // TODO: heap allocation going BRRR
+            line: lexer.line,
+            pos: lexer.curr,
+            message,
+        }
+    }
+}
+
+impl std::fmt::Display for LexerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{} at {}-{}: {}", self.filename, self.line, self.pos, self.message)
+    }
+}
+
+impl std::error::Error for LexerError {}
+
 impl Lexer {
-    pub fn new(src: String) -> Lexer {
+    pub fn new(filename: String, src: String) -> Lexer {
         Lexer {
             src,
+            filename,
             curr: 0,
             start: 0,
             line: 0,
@@ -75,13 +106,15 @@ impl Lexer {
         String::from(&self.src[self.start..self.curr])
     }
 
-    fn consume_string(&mut self) -> Result<String, &'static str> {
+    fn consume_string(&mut self) -> Result<String, LexerError> {
         match self.src[self.curr+1..].find('"') {
             Some(end) => {
                 self.curr += end + 2;
                 Ok(String::from(&self.src[self.start..self.curr]))
             },
-            None => Err("type String should end with \"")
+            None => Err(
+                LexerError::new(String::from("expected trailing \""), &self)
+            )
         }
     }
 
@@ -115,13 +148,14 @@ impl Lexer {
         }
     }
 
-    pub fn next(&mut self) -> Result<TokenHeader, &'static str> {
+    pub fn next(&mut self) -> Result<TokenHeader, LexerError> {
         self.start = self.curr;
         let c = match self.consume_char() {
             Some(c) => c,
             None => return Ok(TokenHeader {
                 val: Token::EOF,
-                _pos: self.start,
+                pos: self.start,
+                line: self.line
             })
         };
         let tok = match c {
@@ -185,29 +219,21 @@ impl Lexer {
                     _ => Token::Identifer(id)
                 }
             },
-            _ => return Err("Invalid token")
+            c => return Err(
+                LexerError::new(format!("invalid character {}", c), &self)
+            )
         };
         Ok(TokenHeader {
             val: tok,
-            _pos: self.start,
+            pos: self.start,
+            line: self.line
         })
     }
 
-    pub fn peak(&mut self) -> Result<TokenHeader, &'static str> {
+    pub fn peak(&mut self) -> Result<TokenHeader, LexerError> {
         let (start, curr) = (self.start, self.curr);
         let tok = self.next()?;
         self.start = start; self.curr = curr;
         Ok(tok)
-    }
-
-    pub fn had(&mut self, what: Token) -> Result<bool, &'static str> {
-        let (start, curr) = (self.start, self.curr);
-        let tok = self.next()?;
-        if tok.val == what {
-            Ok(true)
-        } else {
-            self.start = start; self.curr = curr;
-            Ok(false)
-        }
     }
 }
