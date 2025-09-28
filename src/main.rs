@@ -38,7 +38,7 @@ fn main() {
         process::exit(69)
     });
 
-    vm::exec(prog).unwrap_or_else(|err| {
+    vm::exec(&prog).unwrap_or_else(|err| {
         eprintln!("Failed executing bytecode: {}", err);
         process::exit(69)
     });

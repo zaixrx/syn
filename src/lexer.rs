@@ -4,14 +4,14 @@ pub struct Lexer {
     curr: usize,
     start: usize,
     line: usize,
-    filename: String,
 }
 
 #[derive(Debug)]
 pub struct TokenHeader {
     pub val: Token,
-    pub pos: usize,
+    pub coln: usize,
     pub line: usize,
+    pub lexeme: String,
 }
 
 #[derive(Debug, PartialEq)]
@@ -19,14 +19,14 @@ pub enum Token {
     LeftParen,
     RightParen,
     LeftBrace,
-	RightBrace,
+    RightBrace,
     Colon,
-	SemiColon,
+    SemiColon,
 
     Minus,
-	Slash,
-	Plus,
-	Star,
+    Slash,
+    Plus,
+    Star,
 
     Bang,
     BangEqual,
@@ -37,10 +37,10 @@ pub enum Token {
     Greater,
     GreaterEqual,
 
-	While,
+    While,
     Break,
-	Continue,
-	Print,
+    Continue,
+    Print,
 
     Identifer(String),
     LiteralString(String),
@@ -53,7 +53,6 @@ pub enum Token {
 
 #[derive(Debug)]
 pub struct LexerError {
-    filename: String,
     line: usize,
     pos: usize,
     message: String,
@@ -62,7 +61,6 @@ pub struct LexerError {
 impl LexerError {
     pub fn new(message: String, lexer: &Lexer) -> LexerError {
         LexerError {
-            filename: lexer.filename.clone(), // TODO: heap allocation going BRRR
             line: lexer.line,
             pos: lexer.curr,
             message,
@@ -72,17 +70,16 @@ impl LexerError {
 
 impl std::fmt::Display for LexerError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{} at {}-{}: {}", self.filename, self.line, self.pos, self.message)
+        write!(f, "at {}-{}: {}", self.line, self.pos, self.message)
     }
 }
 
 impl std::error::Error for LexerError {}
 
 impl Lexer {
-    pub fn new(filename: String, src: String) -> Lexer {
+    pub fn new(src: String) -> Lexer {
         Lexer {
             src,
-            filename,
             curr: 0,
             start: 0,
             line: 0,
