@@ -1,11 +1,51 @@
+#[repr(u8)]
 #[derive(Debug, Copy, Clone)]
-pub enum Inst {
-    PushInt(i64),
+pub enum Op {
+    Push,
     Add,
     Sub,
     Mul,
     Div,
+    Neg,
     Print,
+}
+
+pub enum Value {
+    Integer(i64),
+    Float(f64)
+}
+
+pub struct Chunk {
+    byts: Vec<u8>,
+    vals: Vec<Value>,
+}
+
+impl Chunk {
+    pub fn new() -> Self {
+        Self {
+            byts: Vec::new(),
+            vals: Vec::new(),
+        }
+    }
+
+    pub fn push_byte(&mut self, b: u8) {
+        self.byts.push(b);
+    }
+
+    pub fn push_bytes(&mut self, b1: u8, b2: u8) {
+        self.push_byte(b2);
+        self.push_byte(b1);
+    }
+
+    pub fn push_val(&mut self, val: Value) -> Result<u8, &'static str> {
+        let index = self.vals.len();
+        if index > 0xFF {
+            Err("can't define more than 255 constants in one chunks")
+        } else {
+            self.vals.push(val);
+            Ok(index as u8)
+        }
+    }
 }
 
 pub fn exec(prog: Vec<Inst>) -> Result<(), String> {

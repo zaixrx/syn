@@ -1,20 +1,21 @@
 #[derive(Debug)]
 pub struct Lexer {
-    src: String,
+    pub src: String,
+    pub line: usize,
+    pub coln: usize, // TODO: populate this
     curr: usize,
     start: usize,
-    line: usize,
-}
-
-#[derive(Debug)]
-pub struct TokenHeader {
-    pub val: Token,
-    pub coln: usize,
-    pub line: usize,
-    pub lexeme: String,
 }
 
 #[derive(Debug, PartialEq)]
+pub struct TokenHeader {
+    pub valu: Token,
+    pub coln: usize,
+    pub line: usize,
+    pub lexm: String,
+}
+
+#[derive(Debug, Copy, PartialEq, Clone)]
 pub enum Token {
     LeftParen,
     RightParen,
@@ -42,9 +43,10 @@ pub enum Token {
     Continue,
     Print,
 
+    LiteralInt(i64),
     Identifer(String),
     LiteralString(String),
-    LiteralInt(i64),
+
     TypeInteger,
     TypeString,
 
@@ -53,24 +55,26 @@ pub enum Token {
 
 #[derive(Debug)]
 pub struct LexerError {
-    line: usize,
-    pos: usize,
-    message: String,
+    pub line: usize,
+    pub coln: usize,
+    pub mssg: String,
+    pub lexm: String,
 }
 
 impl LexerError {
-    pub fn new(message: String, lexer: &Lexer) -> LexerError {
+    pub fn new(mssg: String, lexer: &Lexer) -> LexerError {
         LexerError {
             line: lexer.line,
-            pos: lexer.curr,
-            message,
+            coln: lexer.coln,
+            lexm: String::from(&lexer.src[lexer.start..lexer.curr]),
+            mssg,
         }
     }
 }
 
 impl std::fmt::Display for LexerError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "at {}-{}: {}", self.line, self.pos, self.message)
+        write!(f, "at {}-{}: {}", self.line, self.coln, self.mssg)
     }
 }
 
@@ -80,9 +84,10 @@ impl Lexer {
     pub fn new(src: String) -> Lexer {
         Lexer {
             src,
+            coln: 0,
+            line: 0,
             curr: 0,
             start: 0,
-            line: 0,
         }
     }
 
@@ -150,9 +155,10 @@ impl Lexer {
         let c = match self.consume_char() {
             Some(c) => c,
             None => return Ok(TokenHeader {
-                val: Token::EOF,
-                pos: self.start,
-                line: self.line
+                valu: Token::EOF,
+                coln: self.coln,
+                line: self.line,
+                lexm: String::from(&self.src[self.start..self.curr])
             })
         };
         let tok = match c {
@@ -221,9 +227,10 @@ impl Lexer {
             )
         };
         Ok(TokenHeader {
-            val: tok,
-            pos: self.start,
-            line: self.line
+            valu: tok,
+            coln: self.coln,
+            line: self.line,
+            lexm: String::from(&self.src[self.start..self.curr])
         })
     }
 
