@@ -15,7 +15,7 @@ pub struct TokenHeader {
     pub lexm: String,
 }
 
-#[derive(Debug, Copy, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 pub enum Token {
     LeftParen,
     RightParen,
@@ -57,12 +57,12 @@ pub enum Token {
 pub struct LexerError {
     pub line: usize,
     pub coln: usize,
-    pub mssg: String,
+    pub mssg: &'static str,
     pub lexm: String,
 }
 
 impl LexerError {
-    pub fn new(mssg: String, lexer: &Lexer) -> LexerError {
+    pub fn new(mssg: &'static str, lexer: &Lexer) -> LexerError {
         LexerError {
             line: lexer.line,
             coln: lexer.coln,
@@ -115,7 +115,7 @@ impl Lexer {
                 Ok(String::from(&self.src[self.start..self.curr]))
             },
             None => Err(
-                LexerError::new(String::from("expected trailing \""), &self)
+                LexerError::new("expected trailing \"", &self)
             )
         }
     }
@@ -222,8 +222,8 @@ impl Lexer {
                     _ => Token::Identifer(id)
                 }
             },
-            c => return Err(
-                LexerError::new(format!("invalid character {}", c), &self)
+            _ => return Err(
+                LexerError::new("invalid character", &self)
             )
         };
         Ok(TokenHeader {
