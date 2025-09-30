@@ -9,7 +9,7 @@ pub struct Lexer {
 
 #[derive(Debug, PartialEq)]
 pub struct TokenHeader {
-    pub valu: Token,
+    pub tokn: Token,
     pub coln: usize,
     pub line: usize,
     pub lexm: String,
@@ -44,8 +44,8 @@ pub enum Token {
     Print,
 
     LiteralInt(i64),
-    Identifer(String),
-    LiteralString(String),
+    LiteralString,
+    Identifer,
 
     TypeInteger,
     TypeString,
@@ -155,7 +155,7 @@ impl Lexer {
         let c = match self.consume_char() {
             Some(c) => c,
             None => return Ok(TokenHeader {
-                valu: Token::EOF,
+                tokn: Token::EOF,
                 coln: self.coln,
                 line: self.line,
                 lexm: String::from(&self.src[self.start..self.curr])
@@ -206,7 +206,8 @@ impl Lexer {
             },
             '"' => {
                 self.curr -= 1;
-                Token::LiteralString(self.consume_string()?)
+                // self.consume_string()?
+                Token::LiteralString
             },
             c if c.is_ascii_alphabetic() => {
                 self.curr -= 1;
@@ -219,7 +220,7 @@ impl Lexer {
                     "print" => Token::Print,
                     "int" => Token::TypeInteger,
                     "string" => Token::TypeString,
-                    _ => Token::Identifer(id)
+                    _ => Token::Identifer
                 }
             },
             _ => return Err(
@@ -227,17 +228,17 @@ impl Lexer {
             )
         };
         Ok(TokenHeader {
-            valu: tok,
+            tokn: tok,
             coln: self.coln,
             line: self.line,
             lexm: String::from(&self.src[self.start..self.curr])
         })
     }
 
-    pub fn peak(&mut self) -> Result<TokenHeader, LexerError> {
-        let (start, curr) = (self.start, self.curr);
-        let tok = self.next()?;
-        self.start = start; self.curr = curr;
-        Ok(tok)
+    pub fn peek(&mut self) -> Result<TokenHeader, LexerError> {
+        let curr = self.curr;
+        let result = self.next();
+        self.curr = curr;
+        result
     }
 }

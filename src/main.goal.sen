@@ -1,10 +1,14 @@
-int a = 1;
-int b = 1;
+extern void print(msg: string);
 
-while a < 100 {
-    a = a + b;
-    b = a - b;
+void main() {
+	int a = 1;
+	int b = 1;
+
+	while a < 100 {
+	    a = a + b;
+	    b = a - b;
+	}
+
+	string message = "hello world";
+	print(message);
 }
-
-string message = "hello world";
-print(message);

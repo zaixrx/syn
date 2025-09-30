@@ -91,7 +91,7 @@ impl Compiler {
     fn next(&mut self) -> Result<TokenHeader, CompilerError> {
         match self.lexer.next() {
             Ok(tok) => {
-                self.curr = tok.valu;
+                self.curr = tok.tokn;
                 Ok(tok)
             },
             Err(e) => {
@@ -100,9 +100,16 @@ impl Compiler {
         }
     }
 
+    fn peek(&mut self) -> Result<TokenHeader, CompilerError> {
+        match self.lexer.peek() {
+            Ok(tok) => Ok(tok),
+            Err(e) => Err(CompilerError::new(e.line, e.coln, e.mssg, e.lexm))
+        }
+    }
+
     fn expect(&mut self, what: Token, msg: &'static str) -> Result<(), CompilerError> {
         let tok = self.next()?;
-        if tok.valu != what {
+        if tok.tokn != what {
             Err(CompilerError::from_tok(tok, msg))
         } else {
             Ok(())
@@ -122,15 +129,16 @@ impl Compiler {
     }
 
     fn group(&mut self) -> Result<(), CompilerError> {
-        self.parse_precedence(Precedence::Primary);
-        Ok(self.expect(Token::RightParen, "expected closing ')'")?)
+        self.expression()?;
+        self.expect(Token::RightParen, "expected closing ')'")?;
+        Ok(())
     }
 
     fn unary(&mut self) -> Result<(), CompilerError> {
         let op_tok = self.curr;
-        self.parse_precedence(Precedence::Unary);
+        self.parse_precedence(Precedence::Unary)?;
         match op_tok {
-            Token::Minus => self.chunk.push_byte(Op::Neg as u8),
+            Token::Minus => self.chunk.push_byte(Op::Neg),
             _ => panic!("Compiler::unary ~ invalid unary operator")
         };
         Ok(())
@@ -138,12 +146,12 @@ impl Compiler {
 
     fn binary(&mut self) -> Result<(), CompilerError> {
         let op_tok = self.curr;
-        self.parse_precedence(self.get_rule(op_tok).prec);
+        self.parse_precedence(self.get_rule(op_tok).prec)?;
         match op_tok {
-            Token::Minus => self.chunk.push_byte(Op::Sub as u8),
-            Token::Slash => self.chunk.push_byte(Op::Div as u8),
-            Token::Plus => self.chunk.push_byte(Op::Add as u8),
-            Token::Star => self.chunk.push_byte(Op::Mul as u8),
+            Token::Minus => self.chunk.push_byte(Op::Sub),
+            Token::Slash => self.chunk.push_byte(Op::Div),
+            Token::Plus => self.chunk.push_byte(Op::Add),
+            Token::Star => self.chunk.push_byte(Op::Mul),
             _ => panic!("Compiler::binary ~ invalid binary operator")
         };
         Ok(())
@@ -153,13 +161,14 @@ impl Compiler {
     // binary: unary [- | / | + | *] unary
     fn parse_precedence(&mut self, precedence: Precedence) -> Result<(), CompilerError> {
         let prefix_tok = self.next()?;
-        match self.get_rule(prefix_tok.valu).prefix {
+        match self.get_rule(prefix_tok.tokn).prefix {
             Some(prefix) => {
                 prefix(self)?;
                 loop {
-                    let infix_tok = self.next()?;
-                    let infix_rule = self.get_rule(infix_tok.valu);
+                    let infix_tok = self.peek()?;
+                    let infix_rule = self.get_rule(infix_tok.tokn);
                     if precedence > infix_rule.prec { break; }
+                    self.next()?;
                     infix_rule.infix.unwrap()(self)?;
                 }
             },
@@ -173,7 +182,7 @@ impl Compiler {
 
 
 #[derive(Debug)]
-struct CompilerError {
+pub struct CompilerError {
     line: usize,
     coln: usize,
     mssg: &'static str,

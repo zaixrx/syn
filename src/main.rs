@@ -32,14 +32,17 @@ fn main() {
         process::exit(69)
     });
 
-    let mut compiler = Compiler::new(args.filepath, src);
-    let prog = compiler.compile().unwrap_or_else(|err| {
+    let compiler = Compiler::new(src);
+
+    let chunk = compiler.compile().unwrap_or_else(|err| {
         eprintln!("Failed generating bytecode: {}", err);
         process::exit(69)
     });
 
-    vm::exec(&prog).unwrap_or_else(|err| {
-        eprintln!("Failed executing bytecode: {}", err);
-        process::exit(69)
-    });
+    chunk.disassemble();
+
+    // vm::exec(&prog).unwrap_or_else(|err| {
+    //     eprintln!("Failed executing bytecode: {}", err);
+    //     process::exit(69)
+    // });
 }
