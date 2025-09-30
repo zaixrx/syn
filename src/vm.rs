@@ -13,7 +13,6 @@ pub enum Op {
 #[derive(Debug, Copy, Clone)]
 pub enum Value {
     Integer(i64),
-    Float(f64)
 }
 
 pub struct Chunk {
@@ -56,52 +55,89 @@ impl Chunk {
     }
 }
 
-// pub fn exec(chunk: Chunk) -> Result<(), String> {
-//     let mut stack = Vec::<i64>::new();
-//     for (_, inst) in prog.iter().enumerate() {
-//         match *inst {
-//             Inst::PushInt(num) => {
-//                 stack.push(num);
-//             },
-//             Inst::Add => {
-//                 if stack.len() < 2 {
-//                     return Err(String::from("Add instruction requires at least 2 operands"));
-//                 }
-//                 let x = stack.pop().unwrap_or_default();
-//                 let y = stack.pop().unwrap_or_default();
-//                 stack.push(y + x);
-//             },
-//             Inst::Sub => {
-//                 if stack.len() < 2 {
-//                     return Err(String::from("Sub instruction requires at least 2 operands"));
-//                 }
-//                 let x = stack.pop().unwrap_or_default();
-//                 let y = stack.pop().unwrap_or_default();
-//                 stack.push(y - x);
-//             },
-//             Inst::Mul => {
-//                 if stack.len() < 2 {
-//                     return Err(String::from("Mul instruction requires at least 2 operands"));
-//                 }
-//                 let x = stack.pop().unwrap_or_default();
-//                 let y = stack.pop().unwrap_or_default();
-//                 stack.push(y * x);
-//             },
-//             Inst::Div => {
-//                 if stack.len() < 2 {
-//                     return Err(String::from("Div instruction requires at least 2 operands"));
-//                 }
-//                 let x = stack.pop().unwrap_or_default();
-//                 let y = stack.pop().unwrap_or_default();
-//                 stack.push(y / x);
-//             },
-//             Inst::Print => {
-//                 if stack.len() < 1 {
-//                     return Err(String::from("Print instruction requires at least 1 operand"));
-//                 }
-//                 println!("{}", stack.pop().unwrap_or_default());
-//             },
-//         }
-//     }
-//     return Ok(());
-// }
+pub struct VM {
+    chunk: Chunk,
+    stack: Vec<Value>
+}
+
+impl VM {
+    pub fn new(chunk: Chunk) -> VM {
+        VM {
+            chunk,
+            stack: Vec::new(),
+        }
+    }
+
+    fn binary<U>(&mut self, fun: fn(Value, Value) -> U) -> Result<U, String> { // TODO: custom error
+        if self.stack.len() < 2 {
+            return Err(
+                String::from("Add instruction requires at least 2 operands")
+            );
+        }
+        let b = self.stack.pop().unwrap();
+        let a = self.stack.pop().unwrap();
+        Ok(fun(a, b))
+    }
+
+    pub fn exec(&mut self) -> Result<(), &'static str> {
+        for opbyte in self.chunk.bytes.iter().cloned() {
+            match opbyte {
+                Op::Load(i) => {
+                    if i as usize >= self.chunk.values.len() {
+                        return Err("constant doesn't exist");
+                    }
+                    self.stack.push(self.chunk.values[i as usize]);
+                },
+                Op::Add => {
+                    self.binary(|x, y| -> Result<i64, &'static str> {
+                        if let Value::Integer(x) = x && let Value::Integer(y) = y {
+                            Ok(x + y)
+                        } else {
+                            Err("'+' operands must both be integers")
+                        }
+                    });
+                },
+                Op::Sub => {
+                    self.binary(|x, y| -> Result<i64, &'static str> {
+                        if let Value::Integer(x) = x && let Value::Integer(y) = y {
+                            Ok(x - y)
+                        } else {
+                            Err("'-' operands must both be integers")
+                        }
+                    });
+                },
+                Op::Mul => {
+                    self.binary(|x, y| -> Result<i64, &'static str> {
+                        if let Value::Integer(x) = x && let Value::Integer(y) = y {
+                            Ok(x * y)
+                        } else {
+                            Err("'*' operands must both be integers")
+                        }
+                    });
+                },
+                Op::Div => {
+                    self.binary(|x, y| -> Result<i64, &'static str> {
+                        if let Value::Integer(x) = x && let Value::Integer(y) = y {
+                            Ok(x / y)
+                        } else {
+                            Err("'/' operands must both be integers")
+                        }
+                    });
+                },
+                Op::Print => {
+                    match self.stack.pop() {
+                        Some(x) => println!("{:?}", x),
+                        None => return Err("printing requires at least a value")
+                    }
+                },
+                Op::Neg => {
+                    match self.stack.pop() {
+                        Some(Value::Integer(x)) => self.stack.push(Value::Integer(-x)),
+                        None => return Err("unary '-' requires at least a numerical value")
+                    }
+                }
+            }
+        }
+        return Ok(());
+    }
+}

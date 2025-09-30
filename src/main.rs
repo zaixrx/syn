@@ -1,7 +1,8 @@
+mod vm;
 mod lexer;
 mod compiler;
-mod vm;
 
+use vm::VM;
 use compiler::Compiler;
 
 use std::fs;
@@ -23,26 +24,24 @@ fn read_args(mut args: impl Iterator<Item = String>) -> Result<Args, &'static st
 
 fn main() {
     let args = read_args(env::args()).unwrap_or_else(|err| {
-        eprintln!("Failed parsing args: {}", err);
+        eprintln!("ArgsParser failed: {}", err);
         process::exit(69)
     });
 
     let src = fs::read_to_string(&args.filepath).unwrap_or_else(|err| {
-        eprintln!("Failed reading file: {}", err);
+        eprintln!("Lexer failed: {}", err);
         process::exit(69)
     });
 
-    let compiler = Compiler::new(src);
-
-    let chunk = compiler.compile().unwrap_or_else(|err| {
-        eprintln!("Failed generating bytecode: {}", err);
+    let chunk = Compiler::new(src).compile().unwrap_or_else(|err| {
+        eprintln!("Codegen failed: {}", err);
         process::exit(69)
     });
-
     chunk.disassemble();
 
-    // vm::exec(&prog).unwrap_or_else(|err| {
-    //     eprintln!("Failed executing bytecode: {}", err);
-    //     process::exit(69)
-    // });
+    let mut vm = VM::new(chunk);
+    vm.exec().unwrap_or_else(|err| {
+        eprintln!("VM failed: {}", err);
+        process::exit(69)
+    });
 }
