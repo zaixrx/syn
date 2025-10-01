@@ -13,6 +13,16 @@ pub enum Op {
 #[derive(Debug, Copy, Clone)]
 pub enum Value {
     Integer(i64),
+    Float(f64),
+}
+
+impl std::fmt::Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self { 
+            Value::Integer(a) => write!(f, "{}", a),
+            Value::Float(a) => write!(f, "{}", a),
+        }
+    }
 }
 
 pub struct Chunk {
@@ -30,11 +40,6 @@ impl Chunk {
 
     pub fn push_byte(&mut self, b: Op) {
         self.bytes.push(b);
-    }
-
-    pub fn push_bytes(&mut self, b1: Op, b2: Op) {
-        self.push_byte(b2);
-        self.push_byte(b1);
     }
 
     pub fn push_val(&mut self, val: Value) -> Result<u8, &'static str> {
@@ -68,19 +73,8 @@ impl VM {
         }
     }
 
-    fn binary<U>(&mut self, fun: fn(Value, Value) -> U) -> Result<U, String> { // TODO: custom error
-        if self.stack.len() < 2 {
-            return Err(
-                String::from("Add instruction requires at least 2 operands")
-            );
-        }
-        let b = self.stack.pop().unwrap();
-        let a = self.stack.pop().unwrap();
-        Ok(fun(a, b))
-    }
-
     pub fn exec(&mut self) -> Result<(), &'static str> {
-        for opbyte in self.chunk.bytes.iter().cloned() {
+        for &opbyte in self.chunk.bytes.iter() {
             match opbyte {
                 Op::Load(i) => {
                     if i as usize >= self.chunk.values.len() {
@@ -88,52 +82,37 @@ impl VM {
                     }
                     self.stack.push(self.chunk.values[i as usize]);
                 },
-                Op::Add => {
-                    self.binary(|x, y| -> Result<i64, &'static str> {
-                        if let Value::Integer(x) = x && let Value::Integer(y) = y {
-                            Ok(x + y)
-                        } else {
-                            Err("'+' operands must both be integers")
-                        }
-                    });
-                },
-                Op::Sub => {
-                    self.binary(|x, y| -> Result<i64, &'static str> {
-                        if let Value::Integer(x) = x && let Value::Integer(y) = y {
-                            Ok(x - y)
-                        } else {
-                            Err("'-' operands must both be integers")
-                        }
-                    });
-                },
-                Op::Mul => {
-                    self.binary(|x, y| -> Result<i64, &'static str> {
-                        if let Value::Integer(x) = x && let Value::Integer(y) = y {
-                            Ok(x * y)
-                        } else {
-                            Err("'*' operands must both be integers")
-                        }
-                    });
-                },
-                Op::Div => {
-                    self.binary(|x, y| -> Result<i64, &'static str> {
-                        if let Value::Integer(x) = x && let Value::Integer(y) = y {
-                            Ok(x / y)
-                        } else {
-                            Err("'/' operands must both be integers")
-                        }
-                    });
+                Op::Add | Op::Sub |
+                Op::Mul | Op::Div => {
+                    if self.stack.len() < 2 {
+                        return Err("instruction requires at least 2 operands");
+                    }
+                    let y = match self.stack.pop().unwrap() {
+                        Value::Integer(a) => a,
+                        _ => return Err("operands must both be integers")
+                    };
+                    let x = match self.stack.pop().unwrap() {
+                        Value::Integer(a) => a,
+                        _ => return Err("operands must both be integers")
+                    };
+                    self.stack.push(Value::Integer(match opbyte {
+                        Op::Add => x + y,
+                        Op::Sub => x - y,
+                        Op::Mul => x * y,
+                        Op::Div => x / y,
+                        _ => unreachable!()
+                    }));
                 },
                 Op::Print => {
                     match self.stack.pop() {
-                        Some(x) => println!("{:?}", x),
+                        Some(x) => println!("{x}"),
                         None => return Err("printing requires at least a value")
                     }
                 },
                 Op::Neg => {
                     match self.stack.pop() {
                         Some(Value::Integer(x)) => self.stack.push(Value::Integer(-x)),
-                        None => return Err("unary '-' requires at least a numerical value")
+                        _ => return Err("unary '-' requires at least an integer")
                     }
                 }
             }

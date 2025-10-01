@@ -49,8 +49,8 @@ impl Compiler {
     }
 
     pub fn compile(mut self) -> Result<Chunk, CompilerError> {
-        self.chunk.push_byte(Op::Print);
         self.expression()?;
+        self.chunk.push_byte(Op::Print);
         Ok(self.chunk)
     }
 
