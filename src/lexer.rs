@@ -29,6 +29,8 @@ pub enum Token {
     Plus,
     Star,
 
+    And,
+    Or,
     Bang,
     BangEqual,
     Equal,
@@ -43,12 +45,13 @@ pub enum Token {
     Continue,
     Print,
 
-    LiteralInt(i64),
+    Nil,
+    Int(i64),
+    Bool(bool),
     LiteralString,
     Identifer,
 
     TypeInteger,
-    TypeString,
 
     EOF,
 }
@@ -199,10 +202,24 @@ impl Lexer {
                     Token::Greater
                 }
             },
+            '|' => {
+                if self.expect_char('|') {
+                    Token::Or
+                } else {
+                    return Err(LexerError::new("there is no '|' operator", self))
+                }
+            },
+            '&' => {
+                if self.expect_char('&') {
+                    Token::And
+                } else {
+                    return Err(LexerError::new("there is no '|' operator", self))
+                }
+            },
             ':' => Token::Colon,
             c if c.is_ascii_digit() => {
                 self.curr -= 1;
-                Token::LiteralInt(self.consume_integer())
+                Token::Int(self.consume_integer())
             },
             '"' => {
                 self.curr -= 1;
@@ -219,7 +236,9 @@ impl Lexer {
                     "continue" => Token::Continue,
                     "print" => Token::Print,
                     "int" => Token::TypeInteger,
-                    "string" => Token::TypeString,
+                    "false" => Token::Bool(false),
+                    "true" => Token::Bool(true),
+                    "nil" => Token::Nil,
                     _ => Token::Identifer
                 }
             },

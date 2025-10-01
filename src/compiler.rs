@@ -49,9 +49,20 @@ impl Compiler {
     }
 
     pub fn compile(mut self) -> Result<Chunk, CompilerError> {
-        self.expression()?;
-        self.chunk.push_byte(Op::Print);
+        self.statement()?;
         Ok(self.chunk)
+    }
+
+    fn statement(&mut self) -> Result<(), CompilerError> {
+        let tok = self.next()?;
+        match tok.tokn {
+            Token::Print => {
+                self.expression()?;
+                self.chunk.push_byte(Op::Print);
+            },
+            _ => return Err(CompilerError::from_tok(tok, "invalid statement"))
+        };
+        Ok(())
     }
 
     fn get_rule(&self, tok: Token) -> Rule {
@@ -61,10 +72,25 @@ impl Compiler {
                 infix: None,
                 prec: Precedence::Primary,
             },
-            Token::LiteralInt(_) => Rule {
-                prefix: Some(Compiler::integer),
+            Token::Int(_) => Rule {
+                prefix: Some(Compiler::literal),
                 infix: None,
                 prec: Precedence::Primary,
+            },
+            Token::Bool(_) => Rule {
+                prefix: Some(Compiler::literal),
+                infix: None,
+                prec: Precedence::Primary,
+            },
+            Token::Nil => Rule {
+                prefix: Some(Compiler::literal),
+                infix: None,
+                prec: Precedence::Primary,
+            },
+            Token::Bang => Rule {
+                prefix: Some(Compiler::unary),
+                infix: None,
+                prec: Precedence::Unary,
             },
             Token::Minus => Rule {
                 prefix: Some(Compiler::unary),
@@ -80,6 +106,27 @@ impl Compiler {
                 prefix: None,
                 infix: Some(Compiler::binary),
                 prec: Precedence::Factor,
+            },
+            Token::Or => Rule {
+                prefix: None,
+                infix: Some(Compiler::binary),
+                prec: Precedence::Or,
+            },
+            Token::And => Rule {
+                prefix: None,
+                infix: Some(Compiler::binary),
+                prec: Precedence::And,
+            },
+            Token::EqualEqual | Token::BangEqual => Rule {
+                prefix: None,
+                infix: Some(Compiler::binary),
+                prec: Precedence::Equality,
+            },
+            Token::Greater | Token::Less |
+            Token::GreaterEqual | Token::LessEqual => Rule {
+                prefix: None,
+                infix: Some(Compiler::binary),
+                prec: Precedence::Comparison,
             },
             _ => Rule {
                 prefix: None,
@@ -121,9 +168,12 @@ impl Compiler {
         self.parse_precedence(Precedence::Assignment)
     }
 
-    fn integer(&mut self) -> Result<(), CompilerError> {
-        match self.curr {
-            Token::LiteralInt(val) => self.chunk.push_val(Value::Integer(val)),
+    fn literal(&mut self) -> Result<(), CompilerError> {
+        // TODO: handle result
+        let _ = match self.curr {
+            Token::Int(val) => self.chunk.push_val(Value::Integer(val)),
+            Token::Bool(val) => self.chunk.push_val(Value::Bool(val)),
+            Token::Nil => self.chunk.push_val(Value::Nil),
             _ => panic!("Compiler::integer ~ expected integer")
         };
         Ok(())
@@ -138,23 +188,32 @@ impl Compiler {
     fn unary(&mut self) -> Result<(), CompilerError> {
         let op_tok = self.curr;
         self.parse_precedence(Precedence::Unary)?;
-        match op_tok {
-            Token::Minus => self.chunk.push_byte(Op::Neg),
+        self.chunk.push_byte(match op_tok {
+            Token::Minus => Op::Neg,
+            Token::Bang => Op::Not,
             _ => panic!("Compiler::unary ~ invalid unary operator")
-        };
+        });
         Ok(())
     }
 
     fn binary(&mut self) -> Result<(), CompilerError> {
         let op_tok = self.curr;
         self.parse_precedence(self.get_rule(op_tok).prec)?;
-        match op_tok {
-            Token::Minus => self.chunk.push_byte(Op::Sub),
-            Token::Slash => self.chunk.push_byte(Op::Div),
-            Token::Plus => self.chunk.push_byte(Op::Add),
-            Token::Star => self.chunk.push_byte(Op::Mul),
+        self.chunk.push_byte(match op_tok {
+            Token::Minus => Op::Sub,
+            Token::Slash => Op::Div,
+            Token::Plus => Op::Add,
+            Token::Star => Op::Mul,
+            Token::Or => Op::Or,
+            Token::And => Op::And,
+            Token::EqualEqual => Op::Cmp(true),
+            Token::BangEqual => Op::Cmp(false),
+            Token::Greater => Op::Great,
+            Token::Less => Op::Less,
+            Token::GreaterEqual => Op::GreatEq,
+            Token::LessEqual => Op::LessEq,
             _ => panic!("Compiler::binary ~ invalid binary operator")
-        };
+        });
         Ok(())
     }
 
