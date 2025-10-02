@@ -53,6 +53,18 @@ impl Compiler {
         CompilerError::from_tok(&self.curr, msg)
     }
 
+    fn push_byte(&mut self, b: Op) {
+        self.chunk.push_byte(b, (self.curr.line, self.curr.coln))
+    }
+
+    fn push_bytes(&mut self, b1: Op, b2: Op) {
+        self.chunk.push_bytes(b1, (self.curr.line, self.curr.coln), b2, (self.curr.line, self.curr.coln))
+    }
+
+    fn push_value(&mut self, v: Value) -> Result<u8, &'static str> {
+        self.chunk.push_value(v, (self.curr.line, self.curr.coln))
+    }
+
     pub fn compile(mut self) -> Result<Chunk, CompilerError> {
         loop {
             self.statement()?;
@@ -66,7 +78,7 @@ impl Compiler {
         match self.curr.tokn {
             Token::Print => {
                 self.expression()?;
-                self.chunk.push_byte(Op::Print);
+                self.push_byte(Op::Print);
             },
             Token::EOF => (),
             _ => return Err(self.error("invalid statement"))
@@ -82,6 +94,11 @@ impl Compiler {
                 prec: Precedence::Primary,
             },
             Token::Int(_) => Rule {
+                prefix: Some(Compiler::literal),
+                infix: None,
+                prec: Precedence::Primary,
+            },
+            Token::Float(_) => Rule {
                 prefix: Some(Compiler::literal),
                 infix: None,
                 prec: Precedence::Primary,
@@ -180,9 +197,10 @@ impl Compiler {
     fn literal(&mut self) -> Result<(), CompilerError> {
         // TODO: handle result
         let result = match self.curr.tokn {
-            Token::Int(val) => self.chunk.push_val(Value::Integer(val)),
-            Token::Bool(val) => self.chunk.push_val(Value::Bool(val)),
-            Token::Nil => self.chunk.push_val(Value::Nil),
+            Token::Int(val) => self.push_value(Value::Integer(val)),
+            Token::Float(val) => self.push_value(Value::Float(val)),
+            Token::Bool(val) => self.push_value(Value::Bool(val)),
+            Token::Nil => self.push_value(Value::Nil),
             _ => panic!("Compiler::integer ~ expected integer")
         };
         if let Some(e) = result.err() {
@@ -201,7 +219,7 @@ impl Compiler {
     fn unary(&mut self) -> Result<(), CompilerError> {
         let op_tok = self.curr.tokn;
         self.parse_precedence(Precedence::Unary)?;
-        self.chunk.push_byte(match op_tok {
+        self.push_byte(match op_tok {
             Token::Minus => Op::Neg,
             Token::Bang => Op::Not,
             _ => panic!("Compiler::unary ~ invalid unary operator")
@@ -213,18 +231,18 @@ impl Compiler {
         let op_tok = self.curr.tokn;
         self.parse_precedence(self.get_rule(op_tok).prec)?;
         match op_tok {
-            Token::Minus => self.chunk.push_byte(Op::Sub),
-            Token::Slash => self.chunk.push_byte(Op::Div),
-            Token::Plus => self.chunk.push_byte(Op::Add),
-            Token::Star => self.chunk.push_byte(Op::Mul),
-            Token::Or => self.chunk.push_byte(Op::Or),
-            Token::And => self.chunk.push_byte(Op::And),
-            Token::EqualEqual => self.chunk.push_byte(Op::Equal),
-            Token::BangEqual => self.chunk.push_bytes(Op::Equal, Op::Not),
-            Token::Greater => self.chunk.push_byte(Op::Greater),
-            Token::Less => self.chunk.push_byte(Op::Less),
-            Token::GreaterEqual => self.chunk.push_bytes(Op::Less, Op::Not),
-            Token::LessEqual => self.chunk.push_bytes(Op::Greater, Op::Not),
+            Token::Minus => self.push_byte(Op::Sub),
+            Token::Slash => self.push_byte(Op::Div),
+            Token::Plus => self.push_byte(Op::Add),
+            Token::Star => self.push_byte(Op::Mul),
+            Token::Or => self.push_byte(Op::Or),
+            Token::And => self.push_byte(Op::And),
+            Token::EqualEqual => self.push_byte(Op::Equal),
+            Token::BangEqual => self.push_bytes(Op::Equal, Op::Not),
+            Token::Greater => self.push_byte(Op::Greater),
+            Token::Less => self.push_byte(Op::Less),
+            Token::GreaterEqual => self.push_bytes(Op::Less, Op::Not),
+            Token::LessEqual => self.push_bytes(Op::Greater, Op::Not),
             _ => panic!("Compiler::binary ~ invalid binary operator")
         };
         Ok(())

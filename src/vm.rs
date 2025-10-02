@@ -38,34 +38,39 @@ impl std::fmt::Display for Value {
     }
 }
 
+type ByteInfo = (usize, usize);
+
 pub struct Chunk {
-    bytes: Vec<Op>,
     values: Vec<Value>,
+    bytes: Vec<Op>,
+    bytes_info: Vec<ByteInfo>,
 }
 
 impl Chunk {
     pub fn new() -> Self {
         Self {
-            bytes: Vec::new(),
             values: Vec::new(),
+            bytes: Vec::new(),
+            bytes_info: Vec::new(),
         }
     }
 
-    pub fn push_byte(&mut self, b: Op) {
+    pub fn push_byte(&mut self, b: Op, bi: ByteInfo) {
         self.bytes.push(b);
+        self.bytes_info.push(bi);
     }
 
-    pub fn push_bytes(&mut self, b1: Op, b2: Op) {
-        self.bytes.push(b1);
-        self.bytes.push(b2);
+    pub fn push_bytes(&mut self, b1: Op, bi1: ByteInfo, b2: Op, bi2: ByteInfo) {
+        self.push_byte(b1, bi1);
+        self.push_byte(b2, bi2);
     }
 
-    pub fn push_val(&mut self, val: Value) -> Result<u8, &'static str> {
+    pub fn push_value(&mut self, val: Value, bi: ByteInfo) -> Result<u8, &'static str> {
         let index = self.values.len();
         if index > 0xFF {
             Err("can't define more than 255 constants in one chunks")
         } else {
-            self.push_byte(Op::Load(index as u8));
+            self.push_byte(Op::Load(index as u8), bi);
             self.values.push(val);
             Ok(index as u8)
         }
@@ -94,6 +99,7 @@ impl VM {
     }
 
     pub fn exec(&mut self) -> Result<(), &'static str> {
+        let mut i = 0;
         for &opbyte in self.chunk.bytes.iter() {
             match opbyte {
                 Op::Load(i) => {
@@ -108,23 +114,32 @@ impl VM {
                     if self.stack.len() < 2 {
                         return Err("instruction requires at least 2 operands");
                     }
-                    let y = match self.stack.pop().unwrap() {
-                        Value::Integer(a) => a,
-                        _ => return Err("operands must both be integers")
-                    };
-                    let x = match self.stack.pop().unwrap() {
-                        Value::Integer(a) => a,
-                        _ => return Err("operands must both be integers")
-                    };
-                    self.stack.push(match opbyte {
-                        Op::Add => Value::Integer(x + y),
-                        Op::Sub => Value::Integer(x - y),
-                        Op::Mul => Value::Integer(x * y),
-                        Op::Div => Value::Integer(x / y),
-                        Op::Less => Value::Bool(x < y),
-                        Op::Greater => Value::Bool(x > y),
-                        _ => unreachable!()
-                    });
+                    let y = self.stack.pop().unwrap();
+                    let x = self.stack.pop().unwrap();
+                    if let Value::Integer(x) = x && let Value::Integer(y) = y {
+                        self.stack.push(match opbyte {
+                            Op::Add => Value::Integer(x + y),
+                            Op::Sub => Value::Integer(x - y),
+                            Op::Mul => Value::Integer(x * y),
+                            Op::Div => Value::Integer(x / y),
+                            Op::Less => Value::Bool(x < y),
+                            Op::Greater => Value::Bool(x > y),
+                            _ => unreachable!()
+                        });
+                    } else if let Value::Float(x) = x && let Value::Float(y) = y {
+                        self.stack.push(match opbyte {
+                            Op::Add => Value::Float(x + y),
+                            Op::Sub => Value::Float(x - y),
+                            Op::Mul => Value::Float(x * y),
+                            Op::Div => Value::Float(x / y),
+                            Op::Less => Value::Bool(x < y),
+                            Op::Greater => Value::Bool(x > y),
+                            _ => unreachable!()
+                        });
+                    } else {
+                        println!("{:?}", self.chunk.bytes_info[i]);
+                        return Err("operands must both be numbers")
+                    }
                 },
                 Op::Print => {
                     match self.stack.pop() {
@@ -171,6 +186,7 @@ impl VM {
                     }
                 },
             }
+            i += 1;
         }
         return Ok(());
     }

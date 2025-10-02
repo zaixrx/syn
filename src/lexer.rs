@@ -47,11 +47,10 @@ pub enum Token {
 
     Nil,
     Int(i64),
+    Float(f64),
     Bool(bool),
     LiteralString,
     Identifer,
-
-    TypeInteger,
 
     EOF,
 }
@@ -95,12 +94,11 @@ impl Lexer {
     }
 
     // TODO: u64 -> f64
-    fn consume_integer(&mut self) -> i64 {
+    fn consume_integer(&mut self) {
         self.curr = match self.src[self.curr..].find(|c: char| !c.is_ascii_digit()) {
             Some(end) => self.curr + end,
             None => self.src.len()
         };
-        self.src[self.start..self.curr].parse::<i64>().unwrap()
     }
 
     fn consume_id(&mut self) -> String {
@@ -142,7 +140,7 @@ impl Lexer {
         }
     }
 
-    fn expect_char(&mut self, e: char) -> bool {
+    fn match_char(&mut self, e: char) -> bool {
         match self.src.chars().nth(self.curr) {
             Some(c) => {
                 if c == e {
@@ -173,7 +171,7 @@ impl Lexer {
             ';' => Token::SemiColon,
             '-' => Token::Minus,
             '/' => {
-                if self.expect_char('/') {
+                if self.match_char('/') {
                     self.curr += self.src[self.curr..].find('\n')
                         .unwrap_or_else(|| self.src.len() - (self.curr + 1));
                     return self.next();
@@ -184,42 +182,42 @@ impl Lexer {
             '+' => Token::Plus,
             '*' => Token::Star,
             '=' => {
-                if self.expect_char('=') {
+                if self.match_char('=') {
                     Token::EqualEqual
                 } else {
                     Token::Equal
                 }
             },
             '!' => {
-                if self.expect_char('=') {
+                if self.match_char('=') {
                     Token::BangEqual
                 } else {
                     Token::Bang
                 }
             },
             '<' => {
-                if self.expect_char('=') {
+                if self.match_char('=') {
                     Token::LessEqual
                 } else {
                     Token::Less
                 }
             },
             '>' => {
-                if self.expect_char('=') {
+                if self.match_char('=') {
                     Token::GreaterEqual
                 } else {
                     Token::Greater
                 }
             },
             '|' => {
-                if self.expect_char('|') {
+                if self.match_char('|') {
                     Token::Or
                 } else {
                     return Err(LexerError::new("there is no '|' operator", self))
                 }
             },
             '&' => {
-                if self.expect_char('&') {
+                if self.match_char('&') {
                     Token::And
                 } else {
                     return Err(LexerError::new("there is no '|' operator", self))
@@ -228,7 +226,13 @@ impl Lexer {
             ':' => Token::Colon,
             c if c.is_ascii_digit() => {
                 self.curr -= 1;
-                Token::Int(self.consume_integer())
+                self.consume_integer();
+                if self.match_char('.') {
+                    self.consume_integer();
+                    Token::Float(self.src[self.start..self.curr].parse::<f64>().unwrap())
+                } else {
+                    Token::Int(self.src[self.start..self.curr].parse::<i64>().unwrap())
+                }
             },
             '"' => {
                 self.curr -= 1;
@@ -244,7 +248,6 @@ impl Lexer {
                     "break" => Token::Break,
                     "continue" => Token::Continue,
                     "print" => Token::Print,
-                    "int" => Token::TypeInteger,
                     "false" => Token::Bool(false),
                     "true" => Token::Bool(true),
                     "nil" => Token::Nil,
