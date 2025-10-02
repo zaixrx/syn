@@ -1,0 +1,10 @@
+int a = 1;
+int b = 1;
+
+while a < 100 {
+    a = a + b; // assignment
+    b = a - b;
+}
+
+string message = "hello world";
+print(message);

@@ -33,7 +33,9 @@ fn main() {
         process::exit(69)
     });
 
-    let chunk = Compiler::new(src).compile().unwrap_or_else(|err| {
+    let compiler = Compiler::new(src);
+
+    let chunk = compiler.compile().unwrap_or_else(|err| {
         eprintln!("Codegen failed: {}", err);
         process::exit(69)
     });

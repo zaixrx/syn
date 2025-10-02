@@ -9,14 +9,12 @@ pub enum Op {
     Div,
     Neg,
 
+    Not,
+    Equal,
+    Less,
+    Greater,
     Or,
     And,
-    Less,
-    Great,
-    LessEq,
-    GreatEq,
-    Cmp(bool),
-    Not,
 
     Print,
 }
@@ -55,6 +53,11 @@ impl Chunk {
 
     pub fn push_byte(&mut self, b: Op) {
         self.bytes.push(b);
+    }
+
+    pub fn push_bytes(&mut self, b1: Op, b2: Op) {
+        self.bytes.push(b1);
+        self.bytes.push(b2);
     }
 
     pub fn push_val(&mut self, val: Value) -> Result<u8, &'static str> {
@@ -101,8 +104,7 @@ impl VM {
                 },
                 Op::Add | Op::Sub |
                 Op::Mul | Op::Div |
-                Op::Less | Op::Great |
-                Op::LessEq | Op::GreatEq => {
+                Op::Less | Op::Greater => {
                     if self.stack.len() < 2 {
                         return Err("instruction requires at least 2 operands");
                     }
@@ -120,9 +122,7 @@ impl VM {
                         Op::Mul => Value::Integer(x * y),
                         Op::Div => Value::Integer(x / y),
                         Op::Less => Value::Bool(x < y),
-                        Op::Great => Value::Bool(x > y),
-                        Op::LessEq => Value::Bool(x <= y),
-                        Op::GreatEq => Value::Bool(x >= y),
+                        Op::Greater => Value::Bool(x > y),
                         _ => unreachable!()
                     });
                 },
@@ -156,13 +156,13 @@ impl VM {
                         _ => unreachable!()
                     });
                 },
-                Op::Cmp(target) => {
+                Op::Equal => {
                     if self.stack.len() < 2 {
                         return Err("instruction requires at least 2 operands");
                     }
                     let y = self.stack.pop().unwrap();
                     let x = self.stack.pop().unwrap();
-                    self.stack.push(Value::Bool((x == y) == target));
+                    self.stack.push(Value::Bool(x == y));
                 }
                 Op::Not => {
                     match self.stack.pop() {

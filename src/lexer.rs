@@ -1,8 +1,8 @@
 #[derive(Debug)]
 pub struct Lexer {
-    pub src: String,
-    pub line: usize,
-    pub coln: usize, // TODO: populate this
+    src: String,
+    line: usize,
+    line_start: usize,
     curr: usize,
     start: usize,
 }
@@ -68,7 +68,7 @@ impl LexerError {
     pub fn new(mssg: &'static str, lexer: &Lexer) -> LexerError {
         LexerError {
             line: lexer.line,
-            coln: lexer.coln,
+            coln: lexer.start - lexer.line_start,
             lexm: String::from(&lexer.src[lexer.start..lexer.curr]),
             mssg,
         }
@@ -87,8 +87,8 @@ impl Lexer {
     pub fn new(src: String) -> Lexer {
         Lexer {
             src,
-            coln: 0,
             line: 0,
+            line_start: 0,
             curr: 0,
             start: 0,
         }
@@ -130,6 +130,7 @@ impl Lexer {
                     // TODO: make this not ugly
                     self.curr += 1;
                     if c == '\n' {
+                        self.line_start = self.curr;
                         self.line += 1;
                     } else if c != ' ' && c != '\r' && c != '\t' {
                         return Some(c);
@@ -159,7 +160,7 @@ impl Lexer {
             Some(c) => c,
             None => return Ok(TokenHeader {
                 tokn: Token::EOF,
-                coln: self.coln,
+                coln: self.start - self.line_start,
                 line: self.line,
                 lexm: String::from(&self.src[self.start..self.curr])
             })
@@ -171,7 +172,15 @@ impl Lexer {
             '}' => Token::RightBrace,
             ';' => Token::SemiColon,
             '-' => Token::Minus,
-            '/' => Token::Slash,
+            '/' => {
+                if self.expect_char('/') {
+                    self.curr += self.src[self.curr..].find('\n')
+                        .unwrap_or_else(|| self.src.len() - (self.curr + 1));
+                    return self.next();
+                } else {
+                    Token::Slash
+                }
+            },
             '+' => Token::Plus,
             '*' => Token::Star,
             '=' => {
@@ -246,9 +255,10 @@ impl Lexer {
                 LexerError::new("invalid character", &self)
             )
         };
+
         Ok(TokenHeader {
             tokn: tok,
-            coln: self.coln,
+            coln: self.start - self.line_start,
             line: self.line,
             lexm: String::from(&self.src[self.start..self.curr])
         })
