@@ -25,7 +25,7 @@ enum Precedence {
     Primary
 }
 
-type RuleFn = fn(&mut Compiler) -> Result<(), CompilerError>;
+type RuleFn = fn(&mut Compiler, cab_assign: bool) -> Result<(), CompilerError>;
 
 struct Rule {
     prefix: Option<RuleFn>,
@@ -191,13 +191,13 @@ impl Compiler {
                 self.next()?;
                 self.expect(Token::Identifer, "expected 'identifer' after 'let'")?;
                 // TODO: this needs to be handled by GC
-                let idx = self.push_value(Value::String(self.curr.lexm.clone()))?;
+                self.push_value(Value::String(self.curr.lexm.clone()))?;
                 if self.check(Token::Equal)? {
                     self.expression()?;
                 } else {
                     self.push_value(Value::Nil)?;
                 }
-                self.push_byte(Op::GDef(idx));
+                self.push_byte(Op::GDef);
             },
             Token::EOF => {
                 self.next()?;
@@ -215,7 +215,7 @@ impl Compiler {
         self.parse_precedence(Precedence::Assignment)
     }
 
-    fn literal(&mut self) -> Result<(), CompilerError> {
+    fn literal(&mut self, _: bool) -> Result<(), CompilerError> {
         // TODO: handle result
         match self.curr.tokn {
             Token::Int(val) => self.push_value(Value::Integer(val))?,
@@ -231,24 +231,24 @@ impl Compiler {
         Ok(())
     }
 
-    fn variable(&mut self) -> Result<(), CompilerError> {
-        let idx = self.push_value(Value::String(self.curr.lexm.clone()))?;
-        if self.check(Token::Equal)? {
+    fn variable(&mut self, can_assign: bool) -> Result<(), CompilerError> {
+        self.push_value(Value::String(self.curr.lexm.clone()))?;
+        if can_assign && self.check(Token::Equal)? {
             self.expression()?;
-            self.push_byte(Op::GSet(idx));
+            self.push_byte(Op::GSet);
         } else {
-            self.push_byte(Op::GGet(idx));
+            self.push_byte(Op::GGet);
         }
         Ok(())
     }
 
-    fn group(&mut self) -> Result<(), CompilerError> {
+    fn group(&mut self, _: bool) -> Result<(), CompilerError> {
         self.expression()?;
         self.expect(Token::RightParen, "expected closing ')'")?;
         Ok(())
     }
 
-    fn unary(&mut self) -> Result<(), CompilerError> {
+    fn unary(&mut self, _: bool) -> Result<(), CompilerError> {
         let op_tok = self.curr.tokn;
         self.parse_precedence(Precedence::Unary)?;
         self.push_byte(match op_tok {
@@ -259,7 +259,7 @@ impl Compiler {
         Ok(())
     }
 
-    fn binary(&mut self) -> Result<(), CompilerError> {
+    fn binary(&mut self, _: bool) -> Result<(), CompilerError> {
         let op_tok = self.curr.tokn;
         self.parse_precedence(self.get_rule(op_tok).prec)?;
         match op_tok {
@@ -284,13 +284,17 @@ impl Compiler {
         self.next()?;
         match self.get_rule(self.curr.tokn).prefix {
             Some(prefix) => {
-                prefix(self)?;
+                let can_assign = precedence <= Precedence::Assignment;
+                prefix(self, can_assign)?;
                 loop {
                     let infix_tok = self.peek()?;
                     let infix_rule = self.get_rule(infix_tok.tokn);
                     if precedence > infix_rule.prec { break; }
                     self.next()?;
-                    infix_rule.infix.unwrap()(self)?;
+                    infix_rule.infix.unwrap()(self, false)?;
+                }
+                if can_assign && self.peek()?.tokn == Token::Equal {
+                    return Err(self.error("invalid assignment target"));
                 }
             },
             None => return Err(self.error("expected prefix rule"))

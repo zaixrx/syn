@@ -21,9 +21,9 @@ pub enum Op {
     Print,
     Pop,
 
-    GDef(u8),
-    GGet(u8),
-    GSet(u8),
+    GDef,
+    GGet,
+    GSet,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -36,14 +36,14 @@ pub enum Value {
 }
 
 impl Value {
-    fn must_expect_string(&self) -> &String {
+    fn must_expect_string(self) -> String {
         match self.expect_string() {
             Ok(s) => s,
             Err(e) => panic!("{}", e)
         }
     }
 
-    fn expect_string(&self) -> Result<&String, &'static str> {
+    fn expect_string(self) -> Result<String, &'static str> {
         match self {
             Value::String(s) => Ok(s),
             _ => Err("expected string")
@@ -117,7 +117,12 @@ impl Chunk {
     pub fn disassemble(&self) {
         println!("=======");
         for byte in self.bytes.iter().cloned() {
-            println!("{:?}", byte);
+            match byte {
+                Op::Load(i) => {
+                    println!("Load {} --> {:?}", i, self.values[i as usize]);
+                },
+                _ => println!("{:?}", byte)
+            };
         }
         println!("=======");
     }
@@ -136,8 +141,17 @@ impl VM {
         }
     }
 
+    fn pop(&mut self) -> Value {
+        self.stack.pop().unwrap()
+    }
+
+    fn push(&mut self, val: Value) {
+        self.stack.push(val)
+    }
+
     pub fn exec(&mut self) -> Result<(), &'static str> {
-        for opbyte in self.chunk.bytes.iter().cloned() {
+        for i in 0..self.chunk.bytes.len() {
+            let opbyte = self.chunk.bytes[i];
             match opbyte {
                 Op::Load(i) => {
                     if i as usize >= self.chunk.values.len() {
@@ -151,8 +165,8 @@ impl VM {
                     if self.stack.len() < 2 {
                         return Err("instruction requires at least 2 operands");
                     }
-                    let y = self.stack.pop().unwrap();
-                    let x = self.stack.pop().unwrap();
+                    let y = self.pop();
+                    let x = self.pop();
                     if let Value::Integer(x) = x && let Value::Integer(y) = y {
                         self.stack.push(match opbyte {
                             Op::Add => Value::Integer(x + y),
@@ -193,11 +207,11 @@ impl VM {
                     if self.stack.len() < 2 {
                         return Err("instruction requires at least 2 operands");
                     }
-                    let y = match self.stack.pop().unwrap() {
+                    let y = match self.pop() {
                         Value::Bool(a) => a,
                         _ => return Err("left operaand must both be a boolean")
                     };
-                    let x = match self.stack.pop().unwrap() {
+                    let x = match self.pop() {
                         Value::Bool(a) => a,
                         _ => return Err("right operand must both be a boolean")
                     };
@@ -211,8 +225,8 @@ impl VM {
                     if self.stack.len() < 2 {
                         return Err("instruction requires at least 2 operands");
                     }
-                    let y = self.stack.pop().unwrap();
-                    let x = self.stack.pop().unwrap();
+                    let y = self.pop();
+                    let x = self.pop();
                     self.stack.push(Value::Bool(x == y));
                 }
                 Op::Not => {
@@ -224,30 +238,30 @@ impl VM {
                 Op::Pop => {
                     self.stack.pop();
                 },
-                Op::GDef(idx) => {
-                    let name = self.chunk.values[idx as usize].must_expect_string();
-                    let val = self.stack.pop().unwrap();
+                Op::GDef => {
+                    let val = self.pop();
+                    let name = self.pop().must_expect_string();
                     self.chunk.globals.insert(name.into(), Var {
                         typ: val.get_var_type(),
                         val
                     });
                 },
-                Op::GGet(idx) => {
-                    let name = self.chunk.values[idx as usize].must_expect_string();
-                    match self.chunk.globals.get(name) {
+                Op::GGet => {
+                    let name = self.pop().must_expect_string();
+                    match self.chunk.globals.get(&name) {
                         Some(var) => {
                             if var.typ == VarType::None {
                                 return Err("can't use non intialized variable");
                             }
-                            self.stack.push(var.val.clone());
+                            self.push(var.val.clone());
                         },
                         None => return Err("undefined variable")
                     };
                 }
-                Op::GSet(idx) => {
-                    let name = self.chunk.values[idx as usize].must_expect_string();
-                    let val = self.stack.pop().unwrap();
-                    match self.chunk.globals.get(name) {
+                Op::GSet => {
+                    let val = self.pop();
+                    let name = self.pop().must_expect_string();
+                    match self.chunk.globals.get(&name) {
                         Some(var) => {
                             // TODO: typechecking on every access is tedious
                             if val.get_var_type() != var.typ {
