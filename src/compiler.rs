@@ -181,13 +181,14 @@ impl Compiler {
     }
 
     fn statement(&mut self) -> Result<(), CompilerError> {
-        self.next()?;
-        match self.curr.tokn {
+        match self.peek()?.tokn {
             Token::Print => {
+                self.next()?;
                 self.expression()?;
                 self.push_byte(Op::Print);
             },
             Token::Let => {
+                self.next()?;
                 self.expect(Token::Identifer, "expected 'identifer' after 'let'")?;
                 // TODO: this needs to be handled by GC
                 let idx = self.push_value(Value::String(self.curr.lexm.clone()))?;
@@ -198,7 +199,10 @@ impl Compiler {
                 }
                 self.push_byte(Op::GDef(idx));
             },
-            Token::EOF => return Ok(()), // TODO: push RET byte
+            Token::EOF => {
+                self.next()?;
+                return Ok(()); // TODO: push RET byte
+            },
             _ => {
                 self.expression()?;
                 self.push_byte(Op::Pop)
@@ -229,7 +233,12 @@ impl Compiler {
 
     fn variable(&mut self) -> Result<(), CompilerError> {
         let idx = self.push_value(Value::String(self.curr.lexm.clone()))?;
-        self.push_byte(Op::GLoad(idx));
+        if self.check(Token::Equal)? {
+            self.expression()?;
+            self.push_byte(Op::GSet(idx));
+        } else {
+            self.push_byte(Op::GGet(idx));
+        }
         Ok(())
     }
 

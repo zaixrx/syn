@@ -22,7 +22,8 @@ pub enum Op {
     Pop,
 
     GDef(u8),
-    GLoad(u8),
+    GGet(u8),
+    GSet(u8),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -32,6 +33,32 @@ pub enum Value {
     Bool(bool),
     String(String),
     Nil
+}
+
+impl Value {
+    fn must_expect_string(&self) -> &String {
+        match self.expect_string() {
+            Ok(s) => s,
+            Err(e) => panic!("{}", e)
+        }
+    }
+
+    fn expect_string(&self) -> Result<&String, &'static str> {
+        match self {
+            Value::String(s) => Ok(s),
+            _ => Err("expected string")
+        }
+    }
+    
+    fn get_var_type(&self) -> VarType {
+        match self {
+            Value::Integer(_) => VarType::Integer,
+            Value::Float(_) => VarType::Float,
+            Value::Bool(_) => VarType::Bool,
+            Value::String(_) => VarType::String,
+            Value::Nil => VarType::None,
+        }
+    }
 }
 
 #[derive(PartialEq)]
@@ -198,29 +225,15 @@ impl VM {
                     self.stack.pop();
                 },
                 Op::GDef(idx) => {
-                    let name: String = match &self.chunk.values[idx as usize] {
-                        Value::String(s) => s.clone(),
-                        _ => panic!("Compiler::evla -> match Op::GDef ~ expected string identfier")
-                    };
-                    let val = self.stack.pop().unwrap_or_else(|| {
-                        panic!("Compiler::eval -> match OP::GDef ~ expected initalizer")
-                    });
-                    self.chunk.globals.insert(name, Var {
-                        typ: match val {
-                            Value::Integer(_) => VarType::Integer,
-                            Value::Float(_) => VarType::Float,
-                            Value::Bool(_) => VarType::Bool,
-                            Value::String(_) => VarType::String,
-                            Value::Nil => VarType::None,
-                        },
+                    let name = self.chunk.values[idx as usize].must_expect_string();
+                    let val = self.stack.pop().unwrap();
+                    self.chunk.globals.insert(name.into(), Var {
+                        typ: val.get_var_type(),
                         val
                     });
                 },
-                Op::GLoad(idx) => {
-                    let name: &String = match &self.chunk.values[idx as usize] {
-                        Value::String(s) => s,
-                        _ => panic!("Compiler::evla -> match Op::GLoad ~ expected string identfier")
-                    };
+                Op::GGet(idx) => {
+                    let name = self.chunk.values[idx as usize].must_expect_string();
                     match self.chunk.globals.get(name) {
                         Some(var) => {
                             if var.typ == VarType::None {
@@ -229,6 +242,23 @@ impl VM {
                             self.stack.push(var.val.clone());
                         },
                         None => return Err("undefined variable")
+                    };
+                }
+                Op::GSet(idx) => {
+                    let name = self.chunk.values[idx as usize].must_expect_string();
+                    let val = self.stack.pop().unwrap();
+                    match self.chunk.globals.get(name) {
+                        Some(var) => {
+                            // TODO: typechecking on every access is tedious
+                            if val.get_var_type() != var.typ {
+                                return Err("mismatched types");
+                            }
+                            self.chunk.globals.insert(name.into(), Var {
+                                typ: val.get_var_type(),
+                                val
+                            });
+                        },
+                        None => return Err("undefined variable"),
                     };
                 }
             }
