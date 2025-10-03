@@ -44,12 +44,13 @@ pub enum Token {
     Break,
     Continue,
     Print,
+    Let,
 
     Nil,
     Int(i64),
     Float(f64),
     Bool(bool),
-    LiteralString,
+    String,
     Identifer,
 
     EOF,
@@ -93,7 +94,6 @@ impl Lexer {
         }
     }
 
-    // TODO: u64 -> f64
     fn consume_integer(&mut self) {
         self.curr = match self.src[self.curr..].find(|c: char| !c.is_ascii_digit()) {
             Some(end) => self.curr + end,
@@ -101,19 +101,18 @@ impl Lexer {
         };
     }
 
-    fn consume_id(&mut self) -> String {
+    fn consume_id(&mut self) {
         self.curr = match self.src[self.curr..].find(|c: char| !c.is_ascii_alphanumeric()) {
             Some(end) => self.curr + end,
             None => self.src.len()
         };
-        String::from(&self.src[self.start..self.curr])
     }
 
-    fn consume_string(&mut self) -> Result<String, LexerError> {
+    fn consume_string(&mut self) -> Result<(), LexerError> {
         match self.src[self.curr+1..].find('"') {
             Some(end) => {
-                self.curr += end + 2;
-                Ok(String::from(&self.src[self.start..self.curr]))
+                self.curr += end+2;
+                Ok(())
             },
             None => Err(
                 LexerError::new("expected trailing \"", &self)
@@ -125,7 +124,6 @@ impl Lexer {
         loop {
             match self.src.chars().nth(self.curr) {
                 Some(c) => {
-                    // TODO: make this not ugly
                     self.curr += 1;
                     if c == '\n' {
                         self.line_start = self.curr;
@@ -236,21 +234,21 @@ impl Lexer {
             },
             '"' => {
                 self.curr -= 1;
-                // self.consume_string()?
-                Token::LiteralString
+                self.consume_string()?;
+                Token::String
             },
             c if c.is_ascii_alphabetic() => {
                 self.curr -= 1;
-                let id = self.consume_id();
-                // TODO: replace with hashmap
-                match id.as_str() {
-                    "while" => Token::While,
-                    "break" => Token::Break,
-                    "continue" => Token::Continue,
+                self.consume_id();
+                match &self.src[self.start..self.curr] {
+                    "let" => Token::Let,
                     "print" => Token::Print,
                     "false" => Token::Bool(false),
                     "true" => Token::Bool(true),
                     "nil" => Token::Nil,
+                    "while" => Token::While,
+                    "break" => Token::Break,
+                    "continue" => Token::Continue,
                     _ => Token::Identifer
                 }
             },
@@ -258,7 +256,6 @@ impl Lexer {
                 LexerError::new("invalid character", &self)
             )
         };
-
         Ok(TokenHeader {
             tokn: tok,
             coln: self.start - self.line_start,

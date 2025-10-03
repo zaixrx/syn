@@ -49,43 +49,6 @@ impl Compiler {
         }
     }
 
-    fn error(&self, msg: &'static str) -> CompilerError {
-        CompilerError::from_tok(&self.curr, msg)
-    }
-
-    fn push_byte(&mut self, b: Op) {
-        self.chunk.push_byte(b, (self.curr.line, self.curr.coln))
-    }
-
-    fn push_bytes(&mut self, b1: Op, b2: Op) {
-        self.chunk.push_bytes(b1, (self.curr.line, self.curr.coln), b2, (self.curr.line, self.curr.coln))
-    }
-
-    fn push_value(&mut self, v: Value) -> Result<u8, &'static str> {
-        self.chunk.push_value(v, (self.curr.line, self.curr.coln))
-    }
-
-    pub fn compile(mut self) -> Result<Chunk, CompilerError> {
-        loop {
-            self.statement()?;
-            if self.curr.tokn == Token::EOF { break; }
-        }
-        Ok(self.chunk)
-    }
-
-    fn statement(&mut self) -> Result<(), CompilerError> {
-        self.next()?;
-        match self.curr.tokn {
-            Token::Print => {
-                self.expression()?;
-                self.push_byte(Op::Print);
-            },
-            Token::EOF => (),
-            _ => return Err(self.error("invalid statement"))
-        };
-        Ok(())
-    }
-
     fn get_rule(&self, tok: Token) -> Rule {
         match tok {
             Token::LeftParen => Rule {
@@ -102,6 +65,11 @@ impl Compiler {
                 prefix: Some(Compiler::literal),
                 infix: None,
                 prec: Precedence::Primary,
+            },
+            Token::String => Rule {
+                prefix: Some(Compiler::literal),
+                infix: None,
+                prec: Precedence::Primary
             },
             Token::Bool(_) => Rule {
                 prefix: Some(Compiler::literal),
@@ -190,6 +158,27 @@ impl Compiler {
         }
     }
 
+    pub fn compile(mut self) -> Result<Chunk, CompilerError> {
+        loop {
+            self.statement()?;
+            if self.curr.tokn == Token::EOF { break; }
+        }
+        Ok(self.chunk)
+    }
+
+    fn statement(&mut self) -> Result<(), CompilerError> {
+        self.next()?;
+        match self.curr.tokn {
+            Token::Print => {
+                self.expression()?;
+                self.push_byte(Op::Print);
+            },
+            Token::EOF => (),
+            _ => return Err(self.error("invalid statement"))
+        };
+        Ok(())
+    }
+
     fn expression(&mut self) -> Result<(), CompilerError> {
         self.parse_precedence(Precedence::Assignment)
     }
@@ -200,8 +189,12 @@ impl Compiler {
             Token::Int(val) => self.push_value(Value::Integer(val)),
             Token::Float(val) => self.push_value(Value::Float(val)),
             Token::Bool(val) => self.push_value(Value::Bool(val)),
+            Token::String => {
+                let s = &self.curr.lexm[1..self.curr.lexm.len()-1];
+                self.push_value(Value::String(s.into()))
+            },
             Token::Nil => self.push_value(Value::Nil),
-            _ => panic!("Compiler::integer ~ expected integer")
+            _ => panic!("Compiler::literal ~ unhandled literal {:?}", self.curr)
         };
         if let Some(e) = result.err() {
             Err(self.error(e))
@@ -248,8 +241,6 @@ impl Compiler {
         Ok(())
     }
 
-    // expression: unary [binary]
-    // binary: unary [- | / | + | *] unary
     fn parse_precedence(&mut self, precedence: Precedence) -> Result<(), CompilerError> {
         self.next()?;
         match self.get_rule(self.curr.tokn).prefix {
@@ -266,6 +257,22 @@ impl Compiler {
             None => return Err(self.error("expected prefix rule"))
         }
         Ok(())
+    }
+
+    fn push_byte(&mut self, b: Op) {
+        self.chunk.push_byte(b, (self.curr.line, self.curr.coln))
+    }
+
+    fn push_bytes(&mut self, b1: Op, b2: Op) {
+        self.chunk.push_bytes(b1, (self.curr.line, self.curr.coln), b2, (self.curr.line, self.curr.coln))
+    }
+
+    fn push_value(&mut self, v: Value) -> Result<u8, &'static str> {
+        self.chunk.push_value(v, (self.curr.line, self.curr.coln))
+    }
+
+    fn error(&self, msg: &'static str) -> CompilerError {
+        CompilerError::from_tok(&self.curr, msg)
     }
 }
 

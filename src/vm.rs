@@ -20,10 +20,16 @@ pub enum Op {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
+enum ObjectKind {
+    String
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Integer(i64),
     Float(f64),
     Bool(bool),
+    String(String),
     Nil
 }
 
@@ -33,6 +39,7 @@ impl std::fmt::Display for Value {
             Value::Integer(val) => write!(f, "{}", val),
             Value::Float(val) => write!(f, "{}", val),
             Value::Bool(val) => write!(f, "{}", val),
+            Value::String(val) => write!(f, "{}", val),
             Value::Nil => write!(f, "nil"),
         }
     }
@@ -42,6 +49,7 @@ type ByteInfo = (usize, usize);
 
 pub struct Chunk {
     values: Vec<Value>,
+    strings: Vec<String>,
     bytes: Vec<Op>,
     bytes_info: Vec<ByteInfo>,
 }
@@ -50,6 +58,7 @@ impl Chunk {
     pub fn new() -> Self {
         Self {
             values: Vec::new(),
+            strings: Vec::new(),
             bytes: Vec::new(),
             bytes_info: Vec::new(),
         }
@@ -99,14 +108,13 @@ impl VM {
     }
 
     pub fn exec(&mut self) -> Result<(), &'static str> {
-        let mut i = 0;
         for &opbyte in self.chunk.bytes.iter() {
             match opbyte {
                 Op::Load(i) => {
                     if i as usize >= self.chunk.values.len() {
                         return Err("constant doesn't exist");
                     }
-                    self.stack.push(self.chunk.values[i as usize]);
+                    self.stack.push(self.chunk.values[i as usize].clone());
                 },
                 Op::Add | Op::Sub |
                 Op::Mul | Op::Div |
@@ -137,7 +145,6 @@ impl VM {
                             _ => unreachable!()
                         });
                     } else {
-                        println!("{:?}", self.chunk.bytes_info[i]);
                         return Err("operands must both be numbers")
                     }
                 },
@@ -186,7 +193,6 @@ impl VM {
                     }
                 },
             }
-            i += 1;
         }
         return Ok(());
     }
