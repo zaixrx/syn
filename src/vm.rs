@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 #[repr(u8)]
 #[derive(Debug, Copy, Clone)]
 pub enum Op {
@@ -17,11 +19,10 @@ pub enum Op {
     And,
 
     Print,
-}
+    Pop,
 
-#[derive(Debug, Copy, Clone, PartialEq)]
-enum ObjectKind {
-    String
+    GDef(u8),
+    GLoad(u8),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -33,34 +34,35 @@ pub enum Value {
     Nil
 }
 
-impl std::fmt::Display for Value {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self { 
-            Value::Integer(val) => write!(f, "{}", val),
-            Value::Float(val) => write!(f, "{}", val),
-            Value::Bool(val) => write!(f, "{}", val),
-            Value::String(val) => write!(f, "{}", val),
-            Value::Nil => write!(f, "nil"),
-        }
-    }
+#[derive(PartialEq)]
+enum VarType {
+    Integer,
+    Float,
+    Bool,
+    String,
+    None 
+}
+
+struct Var {
+    typ: VarType,
+    val: Value
 }
 
 type ByteInfo = (usize, usize);
-
 pub struct Chunk {
     values: Vec<Value>,
-    strings: Vec<String>,
     bytes: Vec<Op>,
     bytes_info: Vec<ByteInfo>,
+    globals: HashMap<String, Var>
 }
 
 impl Chunk {
     pub fn new() -> Self {
         Self {
             values: Vec::new(),
-            strings: Vec::new(),
             bytes: Vec::new(),
             bytes_info: Vec::new(),
+            globals: HashMap::new(),
         }
     }
 
@@ -108,7 +110,7 @@ impl VM {
     }
 
     pub fn exec(&mut self) -> Result<(), &'static str> {
-        for &opbyte in self.chunk.bytes.iter() {
+        for opbyte in self.chunk.bytes.iter().cloned() {
             match opbyte {
                 Op::Load(i) => {
                     if i as usize >= self.chunk.values.len() {
@@ -192,8 +194,57 @@ impl VM {
                         _ => return Err("unary '!' requires at least a boolean")
                     }
                 },
+                Op::Pop => {
+                    self.stack.pop();
+                },
+                Op::GDef(idx) => {
+                    let name: String = match &self.chunk.values[idx as usize] {
+                        Value::String(s) => s.clone(),
+                        _ => panic!("Compiler::evla -> match Op::GDef ~ expected string identfier")
+                    };
+                    let val = self.stack.pop().unwrap_or_else(|| {
+                        panic!("Compiler::eval -> match OP::GDef ~ expected initalizer")
+                    });
+                    self.chunk.globals.insert(name, Var {
+                        typ: match val {
+                            Value::Integer(_) => VarType::Integer,
+                            Value::Float(_) => VarType::Float,
+                            Value::Bool(_) => VarType::Bool,
+                            Value::String(_) => VarType::String,
+                            Value::Nil => VarType::None,
+                        },
+                        val
+                    });
+                },
+                Op::GLoad(idx) => {
+                    let name: &String = match &self.chunk.values[idx as usize] {
+                        Value::String(s) => s,
+                        _ => panic!("Compiler::evla -> match Op::GLoad ~ expected string identfier")
+                    };
+                    match self.chunk.globals.get(name) {
+                        Some(var) => {
+                            if var.typ == VarType::None {
+                                return Err("can't use non intialized variable");
+                            }
+                            self.stack.push(var.val.clone());
+                        },
+                        None => return Err("undefined variable")
+                    };
+                }
             }
         }
         return Ok(());
+    }
+}
+
+impl std::fmt::Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self { 
+            Value::Integer(val) => write!(f, "{}", val),
+            Value::Float(val) => write!(f, "{}", val),
+            Value::Bool(val) => write!(f, "{}", val),
+            Value::String(val) => write!(f, "{}", val),
+            Value::Nil => write!(f, "nil"),
+        }
     }
 }

@@ -68,7 +68,7 @@ impl LexerError {
     pub fn new(mssg: &'static str, lexer: &Lexer) -> LexerError {
         LexerError {
             line: lexer.line,
-            coln: lexer.start - lexer.line_start,
+            coln: lexer.start - lexer.line_start + 1,
             lexm: String::from(&lexer.src[lexer.start..lexer.curr]),
             mssg,
         }
@@ -87,7 +87,7 @@ impl Lexer {
     pub fn new(src: String) -> Lexer {
         Lexer {
             src,
-            line: 0,
+            line: 1,
             line_start: 0,
             curr: 0,
             start: 0,
@@ -156,7 +156,7 @@ impl Lexer {
             Some(c) => c,
             None => return Ok(TokenHeader {
                 tokn: Token::EOF,
-                coln: self.start - self.line_start,
+                coln: self.start - self.line_start + 1,
                 line: self.line,
                 lexm: String::from(&self.src[self.start..self.curr])
             })
@@ -258,7 +258,7 @@ impl Lexer {
         };
         Ok(TokenHeader {
             tokn: tok,
-            coln: self.start - self.line_start,
+            coln: self.start - self.line_start + 1,
             line: self.line,
             lexm: String::from(&self.src[self.start..self.curr])
         })

@@ -56,6 +56,11 @@ impl Compiler {
                 infix: None,
                 prec: Precedence::Primary,
             },
+            Token::Identifer => Rule {
+                prefix: Some(Compiler::variable),
+                infix: None,
+                prec: Precedence::Primary
+            },
             Token::Int(_) => Rule {
                 prefix: Some(Compiler::literal),
                 infix: None,
@@ -158,6 +163,15 @@ impl Compiler {
         }
     }
 
+    fn check(&mut self, what: Token) -> Result<bool, CompilerError> {
+        if self.peek()?.tokn == what {
+            self.next()?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     pub fn compile(mut self) -> Result<Chunk, CompilerError> {
         loop {
             self.statement()?;
@@ -173,10 +187,24 @@ impl Compiler {
                 self.expression()?;
                 self.push_byte(Op::Print);
             },
-            Token::EOF => (),
-            _ => return Err(self.error("invalid statement"))
+            Token::Let => {
+                self.expect(Token::Identifer, "expected 'identifer' after 'let'")?;
+                // TODO: this needs to be handled by GC
+                let idx = self.push_value(Value::String(self.curr.lexm.clone()))?;
+                if self.check(Token::Equal)? {
+                    self.expression()?;
+                } else {
+                    self.push_value(Value::Nil)?;
+                }
+                self.push_byte(Op::GDef(idx));
+            },
+            Token::EOF => return Ok(()), // TODO: push RET byte
+            _ => {
+                self.expression()?;
+                self.push_byte(Op::Pop)
+            }
         };
-        Ok(())
+        self.expect(Token::SemiColon, "expected ';' after statement")
     }
 
     fn expression(&mut self) -> Result<(), CompilerError> {
@@ -185,22 +213,24 @@ impl Compiler {
 
     fn literal(&mut self) -> Result<(), CompilerError> {
         // TODO: handle result
-        let result = match self.curr.tokn {
-            Token::Int(val) => self.push_value(Value::Integer(val)),
-            Token::Float(val) => self.push_value(Value::Float(val)),
-            Token::Bool(val) => self.push_value(Value::Bool(val)),
+        match self.curr.tokn {
+            Token::Int(val) => self.push_value(Value::Integer(val))?,
+            Token::Float(val) => self.push_value(Value::Float(val))?,
+            Token::Bool(val) => self.push_value(Value::Bool(val))?,
             Token::String => {
                 let s = &self.curr.lexm[1..self.curr.lexm.len()-1];
-                self.push_value(Value::String(s.into()))
+                self.push_value(Value::String(s.into()))?
             },
-            Token::Nil => self.push_value(Value::Nil),
+            Token::Nil => self.push_value(Value::Nil)?,
             _ => panic!("Compiler::literal ~ unhandled literal {:?}", self.curr)
         };
-        if let Some(e) = result.err() {
-            Err(self.error(e))
-        } else {
-            Ok(())
-        }
+        Ok(())
+    }
+
+    fn variable(&mut self) -> Result<(), CompilerError> {
+        let idx = self.push_value(Value::String(self.curr.lexm.clone()))?;
+        self.push_byte(Op::GLoad(idx));
+        Ok(())
     }
 
     fn group(&mut self) -> Result<(), CompilerError> {
@@ -267,8 +297,11 @@ impl Compiler {
         self.chunk.push_bytes(b1, (self.curr.line, self.curr.coln), b2, (self.curr.line, self.curr.coln))
     }
 
-    fn push_value(&mut self, v: Value) -> Result<u8, &'static str> {
-        self.chunk.push_value(v, (self.curr.line, self.curr.coln))
+    fn push_value(&mut self, v: Value) -> Result<u8, CompilerError> {
+        match self.chunk.push_value(v, (self.curr.line, self.curr.coln)) {
+            Ok(idx) => Ok(idx),
+            Err(e) => Err(self.error(e))
+        }
     }
 
     fn error(&self, msg: &'static str) -> CompilerError {

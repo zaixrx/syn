@@ -1,2 +1,2 @@
-print(nil)
-print(nil != nil)
+print(nil);
+print(nil != nil);
