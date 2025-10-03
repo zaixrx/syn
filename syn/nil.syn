@@ -1,0 +1,2 @@
+print(nil)
+print(nil != nil)
