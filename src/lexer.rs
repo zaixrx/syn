@@ -40,14 +40,13 @@ pub enum Token {
     Greater,
     GreaterEqual,
 
-    While,
-    Break,
-    Continue,
+    If,
+    Else,
     Print,
     Let,
 
     Nil,
-    Int(i64),
+    Int(i32),
     Float(f64),
     Bool(bool),
     String,
@@ -229,7 +228,7 @@ impl Lexer {
                     self.consume_integer();
                     Token::Float(self.src[self.start..self.curr].parse::<f64>().unwrap())
                 } else {
-                    Token::Int(self.src[self.start..self.curr].parse::<i64>().unwrap())
+                    Token::Int(self.src[self.start..self.curr].parse::<i32>().unwrap())
                 }
             },
             '"' => {
@@ -246,9 +245,8 @@ impl Lexer {
                     "false" => Token::Bool(false),
                     "true" => Token::Bool(true),
                     "nil" => Token::Nil,
-                    "while" => Token::While,
-                    "break" => Token::Break,
-                    "continue" => Token::Continue,
+                    "if" => Token::If,
+                    "else" => Token::Else,
                     _ => Token::Identifer
                 }
             },

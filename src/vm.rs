@@ -1,8 +1,71 @@
 use std::collections::HashMap;
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum Constant {
+    Integer(i32),
+    Float(f64),
+    Bool(bool),
+    String(String),
+    Nil
+}
+
+impl Constant {
+    fn to_bool(self) -> bool {
+        match self {
+            Constant::Bool(false) | Constant::Nil => false,
+            _ => true
+        }
+    }
+
+    fn expect_string(self) -> String {
+        match self {
+            Constant::String(x) => x,
+            _ => panic!("expected string")
+        }
+    }
+
+    fn expect_integer(self) -> i32 {
+        match self {
+            Constant::Integer(x) => x,
+            _ => panic!("expected integer")
+        }
+    }
+
+    fn expect_bool(self) -> bool {
+        match self {
+            Constant::Bool(x) => x,
+            _ => panic!("expected bool")
+        }
+    }
+
+    fn get_var_type(&self) -> VarType {
+        match self {
+            Constant::Integer(_) => VarType::Integer,
+            Constant::Float(_) => VarType::Float,
+            Constant::Bool(_) => VarType::Bool,
+            Constant::String(_) => VarType::String,
+            Constant::Nil => VarType::None,
+        }
+    }
+}
+
+#[derive(PartialEq)]
+enum VarType {
+    Integer,
+    Float,
+    Bool,
+    String,
+    None 
+}
+
+struct Var {
+    typ: VarType,
+    val: Constant
+}
+
 #[repr(u8)]
 #[derive(Debug, Copy, Clone)]
-pub enum Op {
+pub enum ByteCode {
     Load(u8),
 
     Add,
@@ -27,99 +90,49 @@ pub enum Op {
     LDef,
     LGet(u8),
     LSet(u8),
+
+    JumpIfFalse(u16)
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Value {
-    Integer(i64),
-    Float(f64),
-    Bool(bool),
-    String(String),
-    Nil
-}
-
-impl Value {
-    fn expect_string(self) -> String {
-        match self {
-            Value::String(x) => x,
-            _ => panic!("expected string")
-        }
-    }
-
-    fn expect_integer(self) -> i64 {
-        match self {
-            Value::Integer(x) => x,
-            _ => panic!("expected integer")
-        }
-    }
-
-    fn expect_bool(self) -> bool {
-        match self {
-            Value::Bool(x) => x,
-            _ => panic!("expected bool")
-        }
-    }
-
-    fn get_var_type(&self) -> VarType {
-        match self {
-            Value::Integer(_) => VarType::Integer,
-            Value::Float(_) => VarType::Float,
-            Value::Bool(_) => VarType::Bool,
-            Value::String(_) => VarType::String,
-            Value::Nil => VarType::None,
-        }
-    }
-}
-
-#[derive(PartialEq)]
-enum VarType {
-    Integer,
-    Float,
-    Bool,
-    String,
-    None 
-}
-
-struct Var {
-    typ: VarType,
-    val: Value
-}
-
-type ByteInfo = (usize, usize);
 pub struct Chunk {
-    values: Vec<Value>,
-    bytes: Vec<Op>,
-    bytes_info: Vec<ByteInfo>,
-    globals: HashMap<String, Var>
+    consts: Vec<Constant>,
+    globals: HashMap<String, Var>,
+    bytes: Vec<ByteCode>,
 }
 
 impl Chunk {
     pub fn new() -> Self {
         Self {
-            values: Vec::new(),
-            bytes: Vec::new(),
-            bytes_info: Vec::new(),
+            consts: Vec::new(),
             globals: HashMap::new(),
+            bytes: Vec::new(),
         }
     }
 
-    pub fn push_byte(&mut self, b: Op, bi: ByteInfo) {
+    pub fn get_count(&self) -> usize {
+        self.bytes.len()
+    }
+
+    pub fn push_byte(&mut self, b: ByteCode) {
         self.bytes.push(b);
-        self.bytes_info.push(bi);
     }
 
-    pub fn push_bytes(&mut self, b1: Op, bi1: ByteInfo, b2: Op, bi2: ByteInfo) {
-        self.push_byte(b1, bi1);
-        self.push_byte(b2, bi2);
+    pub fn set_byte(&mut self, offset: usize, b: ByteCode) {
+        self.bytes[offset] = b;
+    }
+    
+    pub fn push_bytes(&mut self, b1: ByteCode, b2: ByteCode) {
+        self.push_byte(b1);
+        self.push_byte(b2);
     }
 
-    pub fn push_value(&mut self, val: Value, bi: ByteInfo) -> Result<u8, &'static str> {
-        let index = self.values.len();
+    pub fn load_const(&mut self, c: Constant) -> Result<u8, &'static str> {
+        let index = self.consts.len();
         if index > 0xFF {
             Err("can't define more than 255 constants in one chunks")
         } else {
-            self.push_byte(Op::Load(index as u8), bi);
-            self.values.push(val);
+            self.push_byte(ByteCode::Load(index as u8));
+            self.consts.push(c);
             Ok(index as u8)
         }
     }
@@ -128,8 +141,8 @@ impl Chunk {
         println!("=======");
         for byte in self.bytes.iter().cloned() {
             match byte {
-                Op::Load(i) => {
-                    println!("Load {} --> {:?}", i, self.values[i as usize]);
+                ByteCode::Load(i) => {
+                    println!("Load {} --> {:?}", i, self.consts[i as usize]);
                 },
                 _ => println!("{:?}", byte)
             };
@@ -140,7 +153,7 @@ impl Chunk {
 
 pub struct VM {
     chunk: Chunk,
-    stack: Vec<Value>
+    stack: Vec<Constant>
 }
 
 impl VM {
@@ -151,82 +164,83 @@ impl VM {
         }
     }
 
-    fn pop(&mut self) -> Value {
+    fn pop(&mut self) -> Constant {
         self.stack.pop().unwrap()
     }
 
-    fn push(&mut self, val: Value) {
+    fn push(&mut self, val: Constant) {
         self.stack.push(val)
     }
 
     pub fn exec(&mut self) -> Result<(), &'static str> {
-        for i in 0..self.chunk.bytes.len() {
-            let opbyte = self.chunk.bytes[i];
-            match opbyte {
-                Op::Load(i) => {
-                    if i as usize >= self.chunk.values.len() {
+        let mut ip = 0;
+        while ip < self.chunk.get_count() {
+            let byte = self.chunk.bytes[ip];
+            match byte {
+                ByteCode::Load(i) => {
+                    if i as usize >= self.chunk.consts.len() {
                         return Err("constant doesn't exist");
                     }
-                    self.push(self.chunk.values[i as usize].clone());
+                    self.push(self.chunk.consts[i as usize].clone());
                 },
-                Op::Add | Op::Sub |
-                Op::Mul | Op::Div |
-                Op::Less | Op::Greater => {
+                ByteCode::Add | ByteCode::Sub |
+                ByteCode::Mul | ByteCode::Div |
+                ByteCode::Less | ByteCode::Greater => {
                     let y = self.pop();
                     let x = self.pop();
-                    if let Value::Integer(x) = x && let Value::Integer(y) = y {
-                        self.push(match opbyte {
-                            Op::Add => Value::Integer(x + y),
-                            Op::Sub => Value::Integer(x - y),
-                            Op::Mul => Value::Integer(x * y),
-                            Op::Div => Value::Integer(x / y),
-                            Op::Less => Value::Bool(x < y),
-                            Op::Greater => Value::Bool(x > y),
+                    if let Constant::Integer(x) = x && let Constant::Integer(y) = y {
+                        self.push(match byte {
+                            ByteCode::Add => Constant::Integer(x + y),
+                            ByteCode::Sub => Constant::Integer(x - y),
+                            ByteCode::Mul => Constant::Integer(x * y),
+                            ByteCode::Div => Constant::Integer(x / y),
+                            ByteCode::Less => Constant::Bool(x < y),
+                            ByteCode::Greater => Constant::Bool(x > y),
                             _ => unreachable!()
                         });
-                    } else if let Value::Float(x) = x && let Value::Float(y) = y {
-                        self.push(match opbyte {
-                            Op::Add => Value::Float(x + y),
-                            Op::Sub => Value::Float(x - y),
-                            Op::Mul => Value::Float(x * y),
-                            Op::Div => Value::Float(x / y),
-                            Op::Less => Value::Bool(x < y),
-                            Op::Greater => Value::Bool(x > y),
+                    } else if let Constant::Float(x) = x && let Constant::Float(y) = y {
+                        self.push(match byte {
+                            ByteCode::Add => Constant::Float(x + y),
+                            ByteCode::Sub => Constant::Float(x - y),
+                            ByteCode::Mul => Constant::Float(x * y),
+                            ByteCode::Div => Constant::Float(x / y),
+                            ByteCode::Less => Constant::Bool(x < y),
+                            ByteCode::Greater => Constant::Bool(x > y),
                             _ => unreachable!()
                         });
                     } else {
                         return Err("operands must both be numbers")
                     }
                 },
-                Op::Print => {
+                ByteCode::Print => {
                     println!("{}", self.pop());
                 },
-                Op::Neg => {
+                ByteCode::Neg => {
                     let x = self.pop().expect_integer();
-                    self.push(Value::Integer(-x))
+                    self.push(Constant::Integer(-x))
                 }
-                Op::Or | Op::And => {
+                ByteCode::Or | ByteCode::And => {
                     let y = self.pop().expect_bool();
                     let x = self.pop().expect_bool();
-                    self.push(match opbyte {
-                        Op::Or => Value::Bool(x || y),
-                        Op::And => Value::Bool(x && y),
+                    self.push(match byte {
+                        ByteCode::Or => Constant::Bool(x || y),
+                        ByteCode::And => Constant::Bool(x && y),
                         _ => unreachable!()
                     });
                 },
-                Op::Equal => {
+                ByteCode::Equal => {
                     let y = self.pop();
                     let x = self.pop();
-                    self.push(Value::Bool(x == y));
+                    self.push(Constant::Bool(x == y));
                 }
-                Op::Not => {
+                ByteCode::Not => {
                     let b = self.pop().expect_bool();
-                    self.push(Value::Bool(!b));
+                    self.push(Constant::Bool(!b));
                 },
-                Op::Pop => {
+                ByteCode::Pop => {
                     self.pop();
                 },
-                Op::GDef => {
+                ByteCode::GDef => {
                     let val = self.pop();
                     let name = self.pop().expect_string();
                     self.chunk.globals.insert(name.into(), Var {
@@ -234,7 +248,7 @@ impl VM {
                         val
                     });
                 },
-                Op::GGet => {
+                ByteCode::GGet => {
                     let name = self.pop().expect_string();
                     match self.chunk.globals.get(&name) {
                         Some(var) => {
@@ -246,7 +260,7 @@ impl VM {
                         None => return Err("undefined variable")
                     };
                 }
-                Op::GSet => {
+                ByteCode::GSet => {
                     let val = self.pop();
                     let name = self.pop().expect_string();
                     match self.chunk.globals.get(&name) {
@@ -264,29 +278,35 @@ impl VM {
                     };
                     self.push(val);
                 },
-                Op::LDef => (), // yeah
-                Op::LGet(offset) => self.push(self.stack[offset as usize].clone()),
-                Op::LSet(offset) => {
+                ByteCode::LDef => (), // yeah
+                ByteCode::LGet(offset) => self.push(self.stack[offset as usize].clone()),
+                ByteCode::LSet(offset) => {
                     let val = self.pop();
                     if val.get_var_type() != self.stack[offset as usize].get_var_type() {
                         return Err("mismatched types");
                     }
                     self.stack[offset as usize] = val;
+                },
+                ByteCode::JumpIfFalse(jump) => {
+                    if !self.pop().to_bool() {
+                        ip += jump as usize;
+                    }
                 }
             }
+            ip += 1;
         }
         return Ok(());
     }
 }
 
-impl std::fmt::Display for Value {
+impl std::fmt::Display for Constant {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self { 
-            Value::Integer(val) => write!(f, "{}", val),
-            Value::Float(val) => write!(f, "{}", val),
-            Value::Bool(val) => write!(f, "{}", val),
-            Value::String(val) => write!(f, "{}", val),
-            Value::Nil => write!(f, "nil"),
+            Constant::Integer(val) => write!(f, "{}", val),
+            Constant::Float(val) => write!(f, "{}", val),
+            Constant::Bool(val) => write!(f, "{}", val),
+            Constant::String(val) => write!(f, "{}", val),
+            Constant::Nil => write!(f, "nil"),
         }
     }
 }

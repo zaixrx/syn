@@ -5,8 +5,8 @@ use crate::lexer::{
 };
 
 use crate::vm::{
-    Op,
-    Value,
+    ByteCode,
+    Constant,
     Chunk
 };
 
@@ -76,7 +76,7 @@ impl Compiler {
 
     pub fn compile(mut self) -> Result<Chunk, CompilerError> {
         loop {
-            self.statement()?;
+            self.declaration()?;
             if self.curr.tokn == Token::EOF { break; }
         }
         Ok(self.chunk)
@@ -112,60 +112,109 @@ impl Compiler {
         -1
     }
 
+    fn declaration(&mut self) -> Result<(), CompilerError> {
+        match self.peek()?.tokn {
+            Token::Let => {
+                self.next()?;
+                self.expect(Token::Identifer, "expected 'identifer' after 'let'")?;
+                self.define_variable()?;
+                self.expect(Token::SemiColon, "expected ';' after statement")?;
+                Ok(())
+            },
+            _ => self.statement()
+        }
+    }
+
+    fn define_variable(&mut self) -> Result<(), CompilerError> {
+        let byte = if self.scope_depth > 0 {
+            self.define_local()?;
+            ByteCode::LDef
+        } else {
+            self.load_const(Constant::String(self.curr.lexm.clone()))?;
+            ByteCode::GDef
+        };
+        if self.check(Token::Equal)? {
+            self.expression()?;
+        } else {
+            self.load_const(Constant::Nil)?;
+        }
+        self.chunk.push_byte(byte);
+        Ok(())
+    }
+
     fn statement(&mut self) -> Result<(), CompilerError> {
         match self.peek()?.tokn {
+            Token::If => {
+                self.next()?;
+                self.if_statement()?;
+            },
             Token::Print => {
                 self.next()?;
                 self.expression()?;
-                self.push_byte(Op::Print);
+                self.chunk.push_byte(ByteCode::Print);
                 self.expect(Token::SemiColon, "expected ';' after statement")?;
             },
             Token::LeftBrace => {
                 self.next()?;
-                self.start_scope();
-                loop {
-                    let next = self.peek()?;
-                    if next.tokn == Token::RightBrace || next.tokn == Token::EOF {
-                        break;
-                    }
-                    self.statement()?;
-                }
+                self.block()?;
                 self.expect(Token::RightBrace, "expected trailing '}'")?;
-                self.end_scope();
-            },
-            // REFACTOR
-            Token::Let => {
-                self.next()?;
-                self.expect(Token::Identifer, "expected 'identifer' after 'let'")?;
-                if self.scope_depth > 0 {
-                    self.define_local()?;
-                    if self.check(Token::Equal)? {
-                        self.expression()?;
-                    } else {
-                        self.push_value(Value::Nil)?;
-                    }
-                    self.push_byte(Op::LDef);
-                } else {
-                    // TODO: fix -- allocating string on each variable declaration
-                    self.push_value(Value::String(self.curr.lexm.clone()))?;
-                    if self.check(Token::Equal)? {
-                        self.expression()?;
-                    } else {
-                        self.push_value(Value::Nil)?;
-                    }
-                    self.push_byte(Op::GDef);
-                }
-                self.expect(Token::SemiColon, "expected ';' after statement")?;
             },
             Token::EOF => {
                 self.next()?;
             },
             _ => {
                 self.expression()?;
-                self.push_byte(Op::Pop);
+                self.chunk.push_byte(ByteCode::Pop);
                 self.expect(Token::SemiColon, "expected ';' after statement")?;
             }
         };
+        Ok(())
+    }
+
+    fn full_block(&mut self) -> Result<(), CompilerError> {
+        self.expect(Token::LeftBrace, "expected '{' after if condition")?;
+        self.block()?;
+        self.expect(Token::RightBrace, "expected trailing '}'")
+    }
+
+    fn if_statement(&mut self) -> Result<(), CompilerError> {
+        self.expression()?;
+        let if_base = self.push_jump();
+        self.full_block()?;
+        self.load_const(Constant::Bool(false))?;
+        let end_if_base = self.push_jump();
+        self.patch_jump(if_base);
+        if self.check(Token::Else)? {
+            if self.check(Token::If)? {
+                self.if_statement()?;
+            } else {
+                self.full_block()?;
+            }
+        }
+        self.patch_jump(end_if_base);
+        Ok(())
+    }
+
+    fn push_jump(&mut self) -> usize {
+        self.chunk.push_byte(ByteCode::JumpIfFalse(0xFFFF));
+        self.chunk.get_count() - 1
+    }
+
+    fn patch_jump(&mut self, cond_offset: usize) {
+        let jump = (self.chunk.get_count() - (cond_offset + 1)) as u16;
+        self.chunk.set_byte(cond_offset, ByteCode::JumpIfFalse(jump));
+    }
+
+    fn block(&mut self) -> Result<(), CompilerError> {
+        self.start_scope();
+        loop {
+            let next = self.peek()?;
+            if next.tokn == Token::RightBrace || next.tokn == Token::EOF {
+                break;
+            }
+            self.statement()?;
+        }
+        self.end_scope();
         Ok(())
     }
 
@@ -176,14 +225,14 @@ impl Compiler {
     fn literal(&mut self, _: bool) -> Result<(), CompilerError> {
         // TODO: handle result
         match self.curr.tokn {
-            Token::Int(val) => self.push_value(Value::Integer(val))?,
-            Token::Float(val) => self.push_value(Value::Float(val))?,
-            Token::Bool(val) => self.push_value(Value::Bool(val))?,
+            Token::Int(val) => self.load_const(Constant::Integer(val))?,
+            Token::Float(val) => self.load_const(Constant::Float(val))?,
+            Token::Bool(val) => self.load_const(Constant::Bool(val))?,
             Token::String => {
                 let s = &self.curr.lexm[1..self.curr.lexm.len()-1];
-                self.push_value(Value::String(s.into()))?
+                self.load_const(Constant::String(s.into()))?
             },
-            Token::Nil => self.push_value(Value::Nil)?,
+            Token::Nil => self.load_const(Constant::Nil)?,
             _ => panic!("Compiler::literal ~ unhandled literal {:?}", self.curr)
         };
         Ok(())
@@ -193,19 +242,19 @@ impl Compiler {
     fn variable(&mut self, can_assign: bool) -> Result<(), CompilerError> {
         let offset = self.resolve_local(self.curr.lexm.as_str());
         if offset == -1 {
-            self.push_value(Value::String(self.curr.lexm.clone()))?;
+            self.load_const(Constant::String(self.curr.lexm.clone()))?;
             if can_assign && self.check(Token::Equal)? {
                 self.expression()?;
-                self.push_byte(Op::GSet);
+                self.chunk.push_byte(ByteCode::GSet);
             } else {
-                self.push_byte(Op::GGet);
+                self.chunk.push_byte(ByteCode::GGet);
             }
         } else {
             if can_assign && self.check(Token::Equal)? {
                 self.expression()?;
-                self.push_byte(Op::LSet(offset as u8));
+                self.chunk.push_byte(ByteCode::LSet(offset as u8));
             } else {
-                self.push_byte(Op::LGet(offset as u8));
+                self.chunk.push_byte(ByteCode::LGet(offset as u8));
             }
         } 
         Ok(())
@@ -220,9 +269,9 @@ impl Compiler {
     fn unary(&mut self, _: bool) -> Result<(), CompilerError> {
         let op_tok = self.curr.tokn;
         self.parse_precedence(Precedence::Unary)?;
-        self.push_byte(match op_tok {
-            Token::Minus => Op::Neg,
-            Token::Bang => Op::Not,
+        self.chunk.push_byte(match op_tok {
+            Token::Minus => ByteCode::Neg,
+            Token::Bang => ByteCode::Not,
             _ => panic!("Compiler::unary ~ invalid unary operator")
         });
         Ok(())
@@ -232,18 +281,18 @@ impl Compiler {
         let op_tok = self.curr.tokn;
         self.parse_precedence(self.get_rule(op_tok).prec)?;
         match op_tok {
-            Token::Minus => self.push_byte(Op::Sub),
-            Token::Slash => self.push_byte(Op::Div),
-            Token::Plus => self.push_byte(Op::Add),
-            Token::Star => self.push_byte(Op::Mul),
-            Token::Or => self.push_byte(Op::Or),
-            Token::And => self.push_byte(Op::And),
-            Token::EqualEqual => self.push_byte(Op::Equal),
-            Token::BangEqual => self.push_bytes(Op::Equal, Op::Not),
-            Token::Greater => self.push_byte(Op::Greater),
-            Token::Less => self.push_byte(Op::Less),
-            Token::GreaterEqual => self.push_bytes(Op::Less, Op::Not),
-            Token::LessEqual => self.push_bytes(Op::Greater, Op::Not),
+            Token::Minus => self.chunk.push_byte(ByteCode::Sub),
+            Token::Slash => self.chunk.push_byte(ByteCode::Div),
+            Token::Plus => self.chunk.push_byte(ByteCode::Add),
+            Token::Star => self.chunk.push_byte(ByteCode::Mul),
+            Token::Or => self.chunk.push_byte(ByteCode::Or),
+            Token::And => self.chunk.push_byte(ByteCode::And),
+            Token::EqualEqual => self.chunk.push_byte(ByteCode::Equal),
+            Token::BangEqual => self.chunk.push_bytes(ByteCode::Equal, ByteCode::Not),
+            Token::Greater => self.chunk.push_byte(ByteCode::Greater),
+            Token::Less => self.chunk.push_byte(ByteCode::Less),
+            Token::GreaterEqual => self.chunk.push_bytes(ByteCode::Less, ByteCode::Not),
+            Token::LessEqual => self.chunk.push_bytes(ByteCode::Greater, ByteCode::Not),
             _ => return Err(self.error("invalid binary operator"))
         };
         Ok(())
@@ -398,16 +447,8 @@ impl Compiler {
         }
     }
 
-    fn push_byte(&mut self, b: Op) {
-        self.chunk.push_byte(b, (self.curr.line, self.curr.coln))
-    }
-
-    fn push_bytes(&mut self, b1: Op, b2: Op) {
-        self.chunk.push_bytes(b1, (self.curr.line, self.curr.coln), b2, (self.curr.line, self.curr.coln))
-    }
-
-    fn push_value(&mut self, v: Value) -> Result<u8, CompilerError> {
-        match self.chunk.push_value(v, (self.curr.line, self.curr.coln)) {
+    fn load_const(&mut self, v: Constant) -> Result<u8, CompilerError> {
+        match self.chunk.load_const(v) {
             Ok(idx) => Ok(idx),
             Err(e) => Err(self.error(e))
         }
