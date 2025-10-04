@@ -1,11 +1,9 @@
-// TODO: handle -- var a = 1; panic
-let a = 1;
 {
-	let b = 2;
+	let a = 1;
 	{
-		let c = 3;
-		print c;
+		let a = 2;
+		print a;
 	}
-	print b;
+	print a;
 }
 print a;

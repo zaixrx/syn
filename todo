@@ -1,3 +1,4 @@
 - error synchronization when parsing
 - symantic analyzer and type checker
-- avoid allocating new string on each access
+- avoid allocating new string on each global access
+- fix the `var a = expression;` panic

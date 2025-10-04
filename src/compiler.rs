@@ -87,12 +87,13 @@ impl Compiler {
         if self.locals.len() > u8::MAX as usize {
             return Err(self.error("exceeded maximum number of local variable definitions."));
         }
-        let mut i = self.locals.len() - 1;
-        while self.locals[i].scope_depth == self.scope_depth {
-            if self.locals[i].token.lexm == self.curr.lexm {
+        for local in self.locals.iter().rev() {
+            if local.scope_depth < self.scope_depth {
+                break;
+            }
+            if local.token.lexm == self.curr.lexm {
                 return Err(self.error("variable identifiers must be unique within the current scope."));
             }
-            i -= 1;
         }
         self.locals.push(Local {
             token: self.curr.clone(),
@@ -117,10 +118,16 @@ impl Compiler {
                 self.next()?;
                 self.expression()?;
                 self.push_byte(Op::Print);
+                self.expect(Token::SemiColon, "expected ';' after statement")?;
             },
             Token::LeftBrace => {
+                self.next()?;
                 self.start_scope();
-                while self.curr.tokn != Token::RightBrace || self.curr.tokn != Token::EOF {
+                loop {
+                    let next = self.peek()?;
+                    if next.tokn == Token::RightBrace || next.tokn == Token::EOF {
+                        break;
+                    }
                     self.statement()?;
                 }
                 self.expect(Token::RightBrace, "expected trailing '}'")?;
@@ -148,17 +155,18 @@ impl Compiler {
                     }
                     self.push_byte(Op::GDef);
                 }
+                self.expect(Token::SemiColon, "expected ';' after statement")?;
             },
             Token::EOF => {
                 self.next()?;
-                return Ok(()); // TODO: push RET byte
             },
             _ => {
                 self.expression()?;
-                self.push_byte(Op::Pop)
+                self.push_byte(Op::Pop);
+                self.expect(Token::SemiColon, "expected ';' after statement")?;
             }
         };
-        self.expect(Token::SemiColon, "expected ';' after statement")
+        Ok(())
     }
 
     fn expression(&mut self) -> Result<(), CompilerError> {
@@ -236,7 +244,7 @@ impl Compiler {
             Token::Less => self.push_byte(Op::Less),
             Token::GreaterEqual => self.push_bytes(Op::Less, Op::Not),
             Token::LessEqual => self.push_bytes(Op::Greater, Op::Not),
-            _ => panic!("Compiler::binary ~ invalid binary operator")
+            _ => return Err(self.error("invalid binary operator"))
         };
         Ok(())
     }
@@ -258,7 +266,7 @@ impl Compiler {
                     return Err(self.error("invalid assignment target"));
                 }
             },
-            None => return Err(self.error("expected prefix rule"))
+            None => return Err(self.error("expected expression"))
         }
         Ok(())
     }
