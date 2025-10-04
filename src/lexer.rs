@@ -42,6 +42,7 @@ pub enum Token {
 
     If,
     Else,
+    While,
     Print,
     Let,
 
@@ -247,6 +248,7 @@ impl Lexer {
                     "nil" => Token::Nil,
                     "if" => Token::If,
                     "else" => Token::Else,
+                    "while" => Token::While,
                     _ => Token::Identifer
                 }
             },

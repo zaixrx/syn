@@ -148,6 +148,10 @@ impl Compiler {
                 self.next()?;
                 self.if_statement()?;
             },
+            Token::While => {
+                self.next()?;
+                self.while_statement()?;
+            },
             Token::Print => {
                 self.next()?;
                 self.expression()?;
@@ -175,6 +179,18 @@ impl Compiler {
         self.expect(Token::LeftBrace, "expected '{' after if condition")?;
         self.block()?;
         self.expect(Token::RightBrace, "expected trailing '}'")
+    }
+
+    fn while_statement(&mut self) -> Result<(), CompilerError> {
+        let loop_start = self.chunk.get_count();
+        self.expression()?;
+        let begin_base = self.push_jump();
+        self.full_block()?;
+        self.chunk.push_byte(
+            ByteCode::Loop((self.chunk.get_count() - (loop_start - 1)) as u16)
+        );
+        self.patch_jump(begin_base);
+        Ok(())
     }
 
     fn if_statement(&mut self) -> Result<(), CompilerError> {

@@ -91,7 +91,9 @@ pub enum ByteCode {
     LGet(u8),
     LSet(u8),
 
-    JumpIfFalse(u16)
+    Jump(u16),
+    JumpIfFalse(u16),
+    Loop(u16),
 }
 
 pub struct Chunk {
@@ -287,11 +289,17 @@ impl VM {
                     }
                     self.stack[offset as usize] = val;
                 },
+                ByteCode::Jump(jump) => {
+                    ip += jump as usize;
+                },
                 ByteCode::JumpIfFalse(jump) => {
                     if !self.pop().to_bool() {
                         ip += jump as usize;
                     }
-                }
+                },
+                ByteCode::Loop(jump) => {
+                    ip -= jump as usize;
+                },
             }
             ip += 1;
         }
