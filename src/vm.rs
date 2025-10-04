@@ -239,7 +239,7 @@ impl VM {
                     match self.chunk.globals.get(&name) {
                         Some(var) => {
                             if var.typ == VarType::None {
-                                return Err("can't use non intialized variable");
+                                return Err("can't use unintialized variable");
                             }
                             self.push(var.val.clone());
                         },

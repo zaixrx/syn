@@ -259,8 +259,12 @@ impl Compiler {
                     let infix_tok = self.peek()?;
                     let infix_rule = self.get_rule(infix_tok.tokn);
                     if precedence > infix_rule.prec { break; }
-                    self.next()?;
-                    infix_rule.infix.unwrap()(self, can_assign)?;
+                    if let Some(infix) = infix_rule.infix {
+                        self.next()?;
+                        infix(self, can_assign)?;
+                    } else {
+                        return Err(self.error("invalid expression"));
+                    }
                 }
                 if can_assign && self.peek()?.tokn == Token::Equal {
                     return Err(self.error("invalid assignment target"));
