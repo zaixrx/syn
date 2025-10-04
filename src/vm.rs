@@ -24,6 +24,9 @@ pub enum Op {
     GDef,
     GGet,
     GSet,
+    LDef,
+    LGet(u8),
+    LSet(u8),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -36,20 +39,27 @@ pub enum Value {
 }
 
 impl Value {
-    fn must_expect_string(self) -> String {
-        match self.expect_string() {
-            Ok(s) => s,
-            Err(e) => panic!("{}", e)
+    fn expect_string(self) -> String {
+        match self {
+            Value::String(x) => x,
+            _ => panic!("expected string")
         }
     }
 
-    fn expect_string(self) -> Result<String, &'static str> {
+    fn expect_integer(self) -> i64 {
         match self {
-            Value::String(s) => Ok(s),
-            _ => Err("expected string")
+            Value::Integer(x) => x,
+            _ => panic!("expected integer")
         }
     }
-    
+
+    fn expect_bool(self) -> bool {
+        match self {
+            Value::Bool(x) => x,
+            _ => panic!("expected bool")
+        }
+    }
+
     fn get_var_type(&self) -> VarType {
         match self {
             Value::Integer(_) => VarType::Integer,
@@ -157,18 +167,15 @@ impl VM {
                     if i as usize >= self.chunk.values.len() {
                         return Err("constant doesn't exist");
                     }
-                    self.stack.push(self.chunk.values[i as usize].clone());
+                    self.push(self.chunk.values[i as usize].clone());
                 },
                 Op::Add | Op::Sub |
                 Op::Mul | Op::Div |
                 Op::Less | Op::Greater => {
-                    if self.stack.len() < 2 {
-                        return Err("instruction requires at least 2 operands");
-                    }
                     let y = self.pop();
                     let x = self.pop();
                     if let Value::Integer(x) = x && let Value::Integer(y) = y {
-                        self.stack.push(match opbyte {
+                        self.push(match opbyte {
                             Op::Add => Value::Integer(x + y),
                             Op::Sub => Value::Integer(x - y),
                             Op::Mul => Value::Integer(x * y),
@@ -178,7 +185,7 @@ impl VM {
                             _ => unreachable!()
                         });
                     } else if let Value::Float(x) = x && let Value::Float(y) = y {
-                        self.stack.push(match opbyte {
+                        self.push(match opbyte {
                             Op::Add => Value::Float(x + y),
                             Op::Sub => Value::Float(x - y),
                             Op::Mul => Value::Float(x * y),
@@ -192,62 +199,43 @@ impl VM {
                     }
                 },
                 Op::Print => {
-                    match self.stack.pop() {
-                        Some(x) => println!("{x}"),
-                        None => return Err("printing requires at least a value")
-                    }
+                    println!("{}", self.pop());
                 },
                 Op::Neg => {
-                    match self.stack.pop() {
-                        Some(Value::Integer(x)) => self.stack.push(Value::Integer(-x)),
-                        _ => return Err("unary '-' requires at least an integer")
-                    }
+                    let x = self.pop().expect_integer();
+                    self.push(Value::Integer(-x))
                 }
                 Op::Or | Op::And => {
-                    if self.stack.len() < 2 {
-                        return Err("instruction requires at least 2 operands");
-                    }
-                    let y = match self.pop() {
-                        Value::Bool(a) => a,
-                        _ => return Err("left operaand must both be a boolean")
-                    };
-                    let x = match self.pop() {
-                        Value::Bool(a) => a,
-                        _ => return Err("right operand must both be a boolean")
-                    };
-                    self.stack.push(match opbyte {
+                    let y = self.pop().expect_bool();
+                    let x = self.pop().expect_bool();
+                    self.push(match opbyte {
                         Op::Or => Value::Bool(x || y),
                         Op::And => Value::Bool(x && y),
                         _ => unreachable!()
                     });
                 },
                 Op::Equal => {
-                    if self.stack.len() < 2 {
-                        return Err("instruction requires at least 2 operands");
-                    }
                     let y = self.pop();
                     let x = self.pop();
-                    self.stack.push(Value::Bool(x == y));
+                    self.push(Value::Bool(x == y));
                 }
                 Op::Not => {
-                    match self.stack.pop() {
-                        Some(Value::Bool(x)) => self.stack.push(Value::Bool(!x)),
-                        _ => return Err("unary '!' requires at least a boolean")
-                    }
+                    let b = self.pop().expect_bool();
+                    self.push(Value::Bool(!b));
                 },
                 Op::Pop => {
-                    self.stack.pop();
+                    self.pop();
                 },
                 Op::GDef => {
                     let val = self.pop();
-                    let name = self.pop().must_expect_string();
+                    let name = self.pop().expect_string();
                     self.chunk.globals.insert(name.into(), Var {
                         typ: val.get_var_type(),
                         val
                     });
                 },
                 Op::GGet => {
-                    let name = self.pop().must_expect_string();
+                    let name = self.pop().expect_string();
                     match self.chunk.globals.get(&name) {
                         Some(var) => {
                             if var.typ == VarType::None {
@@ -260,7 +248,7 @@ impl VM {
                 }
                 Op::GSet => {
                     let val = self.pop();
-                    let name = self.pop().must_expect_string();
+                    let name = self.pop().expect_string();
                     match self.chunk.globals.get(&name) {
                         Some(var) => {
                             // TODO: typechecking on every access is tedious
@@ -269,13 +257,24 @@ impl VM {
                             }
                             self.chunk.globals.insert(name.into(), Var {
                                 typ: val.get_var_type(),
-                                val
+                                val: val.clone()
                             });
                         },
                         None => return Err("undefined variable"),
                     };
+                    self.push(val);
+                },
+                Op::LDef => (), // yeah
+                Op::LGet(offset) => self.push(self.stack[offset as usize].clone()),
+                Op::LSet(offset) => {
+                    let val = self.pop();
+                    if val.get_var_type() != self.stack[offset as usize].get_var_type() {
+                        return Err("mismatched types");
+                    }
+                    self.stack[offset as usize] = val;
                 }
             }
+            println!("{:?} -- {:?}", opbyte, self.stack);
         }
         return Ok(());
     }

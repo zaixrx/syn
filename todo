@@ -1,0 +1,3 @@
+- error synchronization when parsing
+- symantic analyzer and type checker
+- avoid allocating new string on each access

@@ -33,11 +33,19 @@ struct Rule {
     prec: Precedence,
 }
 
+struct Local {
+    token: TokenHeader,
+    scope_depth: usize,
+}
+
 // TODO: add panic mode
 pub struct Compiler {
     chunk: Chunk,
     lexer: Lexer,
     curr: TokenHeader,
+
+    locals: Vec<Local>,
+    scope_depth: usize,
 }
 
 impl Compiler {
@@ -45,8 +53,216 @@ impl Compiler {
         Self {
             lexer: Lexer::new(src),
             chunk: Chunk::new(),
-            curr: TokenHeader { tokn: Token::EOF, coln: 0, line: 0, lexm: String::new() }
+            curr: TokenHeader { tokn: Token::EOF, coln: 0, line: 0, lexm: String::new() },
+            locals: Vec::with_capacity(u8::MAX as usize),
+            scope_depth: 0
         }
+    }
+
+    fn start_scope(&mut self) {
+        self.scope_depth += 1;
+    }
+
+    fn end_scope(&mut self) {
+        while self.locals.len() > 0 {
+            if self.locals.last().unwrap().scope_depth >= self.scope_depth {
+                self.locals.pop()
+            } else {
+                break;
+            }
+        }
+        self.scope_depth -= 1;
+    }
+
+    pub fn compile(mut self) -> Result<Chunk, CompilerError> {
+        loop {
+            self.statement()?;
+            if self.curr.tokn == Token::EOF { break; }
+        }
+        Ok(self.chunk)
+    }
+
+    // REFACTOR
+    fn define_local(&mut self) -> Result<(), CompilerError> {
+        if self.locals.len() > u8::MAX as usize {
+            return Err(self.error("exceeded maximum number of local variable definitions."));
+        }
+        let mut i = self.locals.len() - 1;
+        while self.locals[i].scope_depth == self.scope_depth {
+            if self.locals[i].token.lexm == self.curr.lexm {
+                return Err(self.error("variable identifiers must be unique within the current scope."));
+            }
+            i -= 1;
+        }
+        self.locals.push(Local {
+            token: self.curr.clone(),
+            scope_depth: self.scope_depth
+        });
+        Ok(())
+    }
+
+    // REFATOR
+    fn resolve_local(&self, name: &str) -> i16 { // i16 to cover all [0-255]
+        let mut i = self.locals.len() - 1;
+        while i >= 0 {
+            if self.locals[i].token.lexm == name {
+                return i as i16;
+            }
+            i -= 1;
+        }
+        i as i16
+    }
+
+    fn statement(&mut self) -> Result<(), CompilerError> {
+        match self.peek()?.tokn {
+            Token::Print => {
+                self.next()?;
+                self.expression()?;
+                self.push_byte(Op::Print);
+            },
+            Token::LeftBrace => {
+                self.start_scope();
+                while self.curr.tokn != Token::RightBrace || self.curr.tokn != Token::EOF {
+                    self.statement()?;
+                }
+                self.expect(Token::RightBrace, "expected trailing '}'")?;
+                self.end_scope();
+            },
+            // REFACTOR
+            Token::Let => {
+                self.next()?;
+                self.expect(Token::Identifer, "expected 'identifer' after 'let'")?;
+                if self.scope_depth > 0 {
+                    self.define_local();
+                    if self.check(Token::Equal)? {
+                        self.expression()?;
+                    } else {
+                        self.push_value(Value::Nil)?;
+                    }
+                    self.push_byte(Op::LDef);
+                } else {
+                    // TODO: fix -- allocating string on each variable declaration
+                    self.push_value(Value::String(self.curr.lexm.clone()))?;
+                    if self.check(Token::Equal)? {
+                        self.expression()?;
+                    } else {
+                        self.push_value(Value::Nil)?;
+                    }
+                    self.push_byte(Op::GDef);
+                }
+            },
+            Token::EOF => {
+                self.next()?;
+                return Ok(()); // TODO: push RET byte
+            },
+            _ => {
+                self.expression()?;
+                self.push_byte(Op::Pop)
+            }
+        };
+        self.expect(Token::SemiColon, "expected ';' after statement")
+    }
+
+    fn expression(&mut self) -> Result<(), CompilerError> {
+        self.parse_precedence(Precedence::Assignment)
+    }
+
+    fn literal(&mut self, _: bool) -> Result<(), CompilerError> {
+        // TODO: handle result
+        match self.curr.tokn {
+            Token::Int(val) => self.push_value(Value::Integer(val))?,
+            Token::Float(val) => self.push_value(Value::Float(val))?,
+            Token::Bool(val) => self.push_value(Value::Bool(val))?,
+            Token::String => {
+                let s = &self.curr.lexm[1..self.curr.lexm.len()-1];
+                self.push_value(Value::String(s.into()))?
+            },
+            Token::Nil => self.push_value(Value::Nil)?,
+            _ => panic!("Compiler::literal ~ unhandled literal {:?}", self.curr)
+        };
+        Ok(())
+    }
+
+    // REFACTOR
+    fn variable(&mut self, can_assign: bool) -> Result<(), CompilerError> {
+        let offset = self.resolve_local(self.curr.lexm.as_str());
+        if offset == -1 {
+            self.push_value(Value::String(self.curr.lexm.clone()))?;
+            if can_assign && self.check(Token::Equal)? {
+                self.expression()?;
+                self.push_byte(Op::GSet);
+            } else {
+                self.push_byte(Op::GGet);
+            }
+        } else {
+            if can_assign && self.check(Token::Equal)? {
+                self.expression()?;
+                self.push_byte(Op::LSet(offset as u8));
+            } else {
+                self.push_byte(Op::LGet(offset as u8));
+            }
+        } 
+        Ok(())
+    }
+
+    fn group(&mut self, _: bool) -> Result<(), CompilerError> {
+        self.expression()?;
+        self.expect(Token::RightParen, "expected closing ')'")?;
+        Ok(())
+    }
+
+    fn unary(&mut self, _: bool) -> Result<(), CompilerError> {
+        let op_tok = self.curr.tokn;
+        self.parse_precedence(Precedence::Unary)?;
+        self.push_byte(match op_tok {
+            Token::Minus => Op::Neg,
+            Token::Bang => Op::Not,
+            _ => panic!("Compiler::unary ~ invalid unary operator")
+        });
+        Ok(())
+    }
+
+    fn binary(&mut self, _: bool) -> Result<(), CompilerError> {
+        let op_tok = self.curr.tokn;
+        self.parse_precedence(self.get_rule(op_tok).prec)?;
+        match op_tok {
+            Token::Minus => self.push_byte(Op::Sub),
+            Token::Slash => self.push_byte(Op::Div),
+            Token::Plus => self.push_byte(Op::Add),
+            Token::Star => self.push_byte(Op::Mul),
+            Token::Or => self.push_byte(Op::Or),
+            Token::And => self.push_byte(Op::And),
+            Token::EqualEqual => self.push_byte(Op::Equal),
+            Token::BangEqual => self.push_bytes(Op::Equal, Op::Not),
+            Token::Greater => self.push_byte(Op::Greater),
+            Token::Less => self.push_byte(Op::Less),
+            Token::GreaterEqual => self.push_bytes(Op::Less, Op::Not),
+            Token::LessEqual => self.push_bytes(Op::Greater, Op::Not),
+            _ => panic!("Compiler::binary ~ invalid binary operator")
+        };
+        Ok(())
+    }
+
+    fn parse_precedence(&mut self, precedence: Precedence) -> Result<(), CompilerError> {
+        self.next()?;
+        match self.get_rule(self.curr.tokn).prefix {
+            Some(prefix) => {
+                let can_assign = precedence <= Precedence::Assignment;
+                prefix(self, can_assign)?;
+                loop {
+                    let infix_tok = self.peek()?;
+                    let infix_rule = self.get_rule(infix_tok.tokn);
+                    if precedence > infix_rule.prec { break; }
+                    self.next()?;
+                    infix_rule.infix.unwrap()(self, can_assign)?;
+                }
+                if can_assign && self.peek()?.tokn == Token::Equal {
+                    return Err(self.error("invalid assignment target"));
+                }
+            },
+            None => return Err(self.error("expected prefix rule"))
+        }
+        Ok(())
     }
 
     fn get_rule(&self, tok: Token) -> Rule {
@@ -170,136 +386,6 @@ impl Compiler {
         } else {
             Ok(false)
         }
-    }
-
-    pub fn compile(mut self) -> Result<Chunk, CompilerError> {
-        loop {
-            self.statement()?;
-            if self.curr.tokn == Token::EOF { break; }
-        }
-        Ok(self.chunk)
-    }
-
-    fn statement(&mut self) -> Result<(), CompilerError> {
-        match self.peek()?.tokn {
-            Token::Print => {
-                self.next()?;
-                self.expression()?;
-                self.push_byte(Op::Print);
-            },
-            Token::Let => {
-                self.next()?;
-                self.expect(Token::Identifer, "expected 'identifer' after 'let'")?;
-                // TODO: this needs to be handled by GC
-                self.push_value(Value::String(self.curr.lexm.clone()))?;
-                if self.check(Token::Equal)? {
-                    self.expression()?;
-                } else {
-                    self.push_value(Value::Nil)?;
-                }
-                self.push_byte(Op::GDef);
-            },
-            Token::EOF => {
-                self.next()?;
-                return Ok(()); // TODO: push RET byte
-            },
-            _ => {
-                self.expression()?;
-                self.push_byte(Op::Pop)
-            }
-        };
-        self.expect(Token::SemiColon, "expected ';' after statement")
-    }
-
-    fn expression(&mut self) -> Result<(), CompilerError> {
-        self.parse_precedence(Precedence::Assignment)
-    }
-
-    fn literal(&mut self, _: bool) -> Result<(), CompilerError> {
-        // TODO: handle result
-        match self.curr.tokn {
-            Token::Int(val) => self.push_value(Value::Integer(val))?,
-            Token::Float(val) => self.push_value(Value::Float(val))?,
-            Token::Bool(val) => self.push_value(Value::Bool(val))?,
-            Token::String => {
-                let s = &self.curr.lexm[1..self.curr.lexm.len()-1];
-                self.push_value(Value::String(s.into()))?
-            },
-            Token::Nil => self.push_value(Value::Nil)?,
-            _ => panic!("Compiler::literal ~ unhandled literal {:?}", self.curr)
-        };
-        Ok(())
-    }
-
-    fn variable(&mut self, can_assign: bool) -> Result<(), CompilerError> {
-        self.push_value(Value::String(self.curr.lexm.clone()))?;
-        if can_assign && self.check(Token::Equal)? {
-            self.expression()?;
-            self.push_byte(Op::GSet);
-        } else {
-            self.push_byte(Op::GGet);
-        }
-        Ok(())
-    }
-
-    fn group(&mut self, _: bool) -> Result<(), CompilerError> {
-        self.expression()?;
-        self.expect(Token::RightParen, "expected closing ')'")?;
-        Ok(())
-    }
-
-    fn unary(&mut self, _: bool) -> Result<(), CompilerError> {
-        let op_tok = self.curr.tokn;
-        self.parse_precedence(Precedence::Unary)?;
-        self.push_byte(match op_tok {
-            Token::Minus => Op::Neg,
-            Token::Bang => Op::Not,
-            _ => panic!("Compiler::unary ~ invalid unary operator")
-        });
-        Ok(())
-    }
-
-    fn binary(&mut self, _: bool) -> Result<(), CompilerError> {
-        let op_tok = self.curr.tokn;
-        self.parse_precedence(self.get_rule(op_tok).prec)?;
-        match op_tok {
-            Token::Minus => self.push_byte(Op::Sub),
-            Token::Slash => self.push_byte(Op::Div),
-            Token::Plus => self.push_byte(Op::Add),
-            Token::Star => self.push_byte(Op::Mul),
-            Token::Or => self.push_byte(Op::Or),
-            Token::And => self.push_byte(Op::And),
-            Token::EqualEqual => self.push_byte(Op::Equal),
-            Token::BangEqual => self.push_bytes(Op::Equal, Op::Not),
-            Token::Greater => self.push_byte(Op::Greater),
-            Token::Less => self.push_byte(Op::Less),
-            Token::GreaterEqual => self.push_bytes(Op::Less, Op::Not),
-            Token::LessEqual => self.push_bytes(Op::Greater, Op::Not),
-            _ => panic!("Compiler::binary ~ invalid binary operator")
-        };
-        Ok(())
-    }
-
-    fn parse_precedence(&mut self, precedence: Precedence) -> Result<(), CompilerError> {
-        self.next()?;
-        match self.get_rule(self.curr.tokn).prefix {
-            Some(prefix) => {
-                let can_assign = precedence <= Precedence::Assignment;
-                prefix(self, can_assign)?;
-                loop {
-                    let infix_tok = self.peek()?;
-                    let infix_rule = self.get_rule(infix_tok.tokn);
-                    if precedence > infix_rule.prec { break; }
-                    self.next()?;
-                    infix_rule.infix.unwrap()(self, false)?;
-                }
-                if can_assign && self.peek()?.tokn == Token::Equal {
-                    return Err(self.error("invalid assignment target"));
-                }
-            },
-            None => return Err(self.error("expected prefix rule"))
-        }
-        Ok(())
     }
 
     fn push_byte(&mut self, b: Op) {

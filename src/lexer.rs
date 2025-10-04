@@ -7,7 +7,7 @@ pub struct Lexer {
     start: usize,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct TokenHeader {
     pub tokn: Token,
     pub coln: usize,
