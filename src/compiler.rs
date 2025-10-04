@@ -66,7 +66,7 @@ impl Compiler {
     fn end_scope(&mut self) {
         while self.locals.len() > 0 {
             if self.locals.last().unwrap().scope_depth >= self.scope_depth {
-                self.locals.pop()
+                self.locals.pop();
             } else {
                 break;
             }
@@ -103,14 +103,12 @@ impl Compiler {
 
     // REFATOR
     fn resolve_local(&self, name: &str) -> i16 { // i16 to cover all [0-255]
-        let mut i = self.locals.len() - 1;
-        while i >= 0 {
-            if self.locals[i].token.lexm == name {
+        for (i, local) in self.locals.iter().enumerate().rev() {
+            if local.token.lexm == name {
                 return i as i16;
             }
-            i -= 1;
         }
-        i as i16
+        -1
     }
 
     fn statement(&mut self) -> Result<(), CompilerError> {
@@ -133,7 +131,7 @@ impl Compiler {
                 self.next()?;
                 self.expect(Token::Identifer, "expected 'identifer' after 'let'")?;
                 if self.scope_depth > 0 {
-                    self.define_local();
+                    self.define_local()?;
                     if self.check(Token::Equal)? {
                         self.expression()?;
                     } else {

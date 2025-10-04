@@ -1,8 +1,9 @@
-var a = 1;
+// TODO: handle -- var a = 1; panic
+let a = 1;
 {
-	var b = 2;
+	let b = 2;
 	{
-		var c = 3;
+		let c = 3;
 		print c;
 	}
 	print b;

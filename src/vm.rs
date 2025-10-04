@@ -274,7 +274,6 @@ impl VM {
                     self.stack[offset as usize] = val;
                 }
             }
-            println!("{:?} -- {:?}", opbyte, self.stack);
         }
         return Ok(());
     }
