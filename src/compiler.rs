@@ -46,6 +46,8 @@ pub struct Compiler {
 
     locals: Vec<Local>,
     scope_depth: usize,
+
+    had_error: bool,
 }
 
 impl Compiler {
@@ -55,7 +57,8 @@ impl Compiler {
             chunk: Chunk::new(),
             curr: TokenHeader { tokn: Token::EOF, coln: 0, line: 0, lexm: String::new() },
             locals: Vec::with_capacity(u8::MAX as usize),
-            scope_depth: 0
+            scope_depth: 0,
+            had_error: false,
         }
     }
 
@@ -74,12 +77,23 @@ impl Compiler {
         self.scope_depth -= 1;
     }
 
-    pub fn compile(mut self) -> Result<Chunk, CompilerError> {
+    pub fn compile(mut self) -> Result<Chunk, Vec<CompilerError>> {
+        let mut errs = Vec::new();
         loop {
-            self.declaration()?;
+            match self.declaration() {
+                Ok(_) => (),
+                Err(err) => {
+                    errs.push(err);
+                    self.had_error = true;
+                }
+            };
             if self.curr.tokn == Token::EOF { break; }
         }
-        Ok(self.chunk)
+        if self.had_error {
+            Err(errs)
+        } else {
+            Ok(self.chunk)
+        }
     }
 
     // REFACTOR

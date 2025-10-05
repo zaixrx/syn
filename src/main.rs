@@ -35,8 +35,11 @@ fn main() {
 
     let compiler = Compiler::new(src);
 
-    let chunk = compiler.compile().unwrap_or_else(|err| {
-        eprintln!("Codegen failed: {}", err);
+    let chunk = compiler.compile().unwrap_or_else(|errs| {
+        eprintln!("Codegen failed:");
+        for err in errs {
+            eprintln!("{}", err);
+        }
         process::exit(69)
     });
     chunk.disassemble();
