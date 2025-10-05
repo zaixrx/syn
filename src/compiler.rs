@@ -187,7 +187,7 @@ impl Compiler {
         let begin_base = self.push_jump();
         self.full_block()?;
         self.chunk.push_byte(
-            ByteCode::Loop((self.chunk.get_count() - (loop_start - 1)) as u16)
+            ByteCode::Loop((self.chunk.get_count() - loop_start + 1) as u16)
         );
         self.patch_jump(begin_base);
         Ok(())
@@ -228,7 +228,7 @@ impl Compiler {
             if next.tokn == Token::RightBrace || next.tokn == Token::EOF {
                 break;
             }
-            self.statement()?;
+            self.declaration()?;
         }
         self.end_scope();
         Ok(())
@@ -446,11 +446,10 @@ impl Compiler {
     }
 
     fn expect(&mut self, what: Token, msg: &'static str) -> Result<(), CompilerError> {
-        self.next()?;
-        if self.curr.tokn != what {
-            Err(self.error(msg))
+        if self.peek()?.tokn == what {
+            self.next()
         } else {
-            Ok(())
+            Err(self.error(msg))
         }
     }
 
@@ -474,7 +473,6 @@ impl Compiler {
         CompilerError::from_tok(&self.curr, msg)
     }
 }
-
 
 #[derive(Debug)]
 pub struct CompilerError {

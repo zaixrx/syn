@@ -170,8 +170,12 @@ impl VM {
         self.stack.pop().unwrap()
     }
 
-    fn push(&mut self, val: Constant) {
-        self.stack.push(val)
+    fn peek(&self) -> &Constant {
+        self.stack.last().unwrap()
+    }
+
+    fn push(&mut self, c: Constant) {
+        self.stack.push(c)
     }
 
     pub fn exec(&mut self) -> Result<(), &'static str> {
@@ -283,11 +287,11 @@ impl VM {
                 ByteCode::LDef => (), // yeah
                 ByteCode::LGet(offset) => self.push(self.stack[offset as usize].clone()),
                 ByteCode::LSet(offset) => {
-                    let val = self.pop();
+                    let val = self.peek();
                     if val.get_var_type() != self.stack[offset as usize].get_var_type() {
                         return Err("mismatched types");
                     }
-                    self.stack[offset as usize] = val;
+                    self.stack[offset as usize] = val.clone();
                 },
                 ByteCode::Jump(jump) => {
                     ip += jump as usize;

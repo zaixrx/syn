@@ -1,6 +1,7 @@
-extern fn print(msg: string);
+// extern fn print(msg: string);
 
-fn main() {
+// fn main() {
+{
 	let a = 1;
 	let b = 1;
 
@@ -8,6 +9,7 @@ fn main() {
 	    a = a + b;
 	    b = a - b;
 	}
+	print(a);
 
 	let message = "hello world";
 	print(message);

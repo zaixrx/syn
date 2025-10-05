@@ -266,8 +266,10 @@ impl Lexer {
 
     pub fn peek(&mut self) -> Result<TokenHeader, LexerError> {
         let curr = self.curr;
+        let line = self.line;
         let result = self.next();
         self.curr = curr;
+        self.line = line;
         result
     }
 }
