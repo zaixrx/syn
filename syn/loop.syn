@@ -1,14 +1,8 @@
 let i = 0;
-
 while true {
 	if i >= 10 {
 		break;
 	}
 	print i;
 	i = i + 1;
-}
-
-while true {
-	let a = 0;
-	break;
 }

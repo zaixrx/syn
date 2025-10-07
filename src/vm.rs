@@ -139,15 +139,20 @@ impl Chunk {
         }
     }
 
+    pub fn disassemble_one(&self, idx: usize) {
+        print!("{:?} :: ", idx);
+        match self.bytes[idx] {
+            ByteCode::Load(i) => {
+                println!("Load {} --> {:?}", i, self.consts[i as usize]);
+            },
+            byte => println!("{:?}", byte)
+        };
+    }
+
     pub fn disassemble(&self) {
         println!("=======");
-        for byte in self.bytes.iter().cloned() {
-            match byte {
-                ByteCode::Load(i) => {
-                    println!("Load {} --> {:?}", i, self.consts[i as usize]);
-                },
-                _ => println!("{:?}", byte)
-            };
+        for i in 0..self.bytes.len() {
+            self.disassemble_one(i);
         }
         println!("=======");
     }
@@ -182,6 +187,7 @@ impl VM {
         let mut ip = 0;
         while ip < self.chunk.get_count() {
             let byte = self.chunk.bytes[ip];
+            // self.chunk.disassemble_one(ip);
             match byte {
                 ByteCode::Load(i) => {
                     if i as usize >= self.chunk.consts.len() {
@@ -293,10 +299,10 @@ impl VM {
                     }
                     self.stack[offset as usize] = val.clone();
                 },
-                ByteCode::Jump(dest) => ip = dest,
+                ByteCode::Jump(dest) => ip = dest - 1, // to make room for iterating
                 ByteCode::JumpIfFalse(dest) => {
                     if !self.pop().to_bool() {
-                        ip = dest;
+                        ip = dest - 1;
                     }
                 },
             }
