@@ -91,9 +91,8 @@ pub enum ByteCode {
     LGet(u8),
     LSet(u8),
 
-    Jump(u16),
-    JumpIfFalse(u16),
-    Loop(u16),
+    Jump(usize),
+    JumpIfFalse(usize),
 }
 
 pub struct Chunk {
@@ -115,17 +114,18 @@ impl Chunk {
         self.bytes.len()
     }
 
-    pub fn push_byte(&mut self, b: ByteCode) {
+    pub fn push_byte(&mut self, b: ByteCode) -> usize {
         self.bytes.push(b);
+        self.bytes.len() - 1
     }
 
     pub fn set_byte(&mut self, offset: usize, b: ByteCode) {
         self.bytes[offset] = b;
     }
     
-    pub fn push_bytes(&mut self, b1: ByteCode, b2: ByteCode) {
+    pub fn push_bytes(&mut self, b1: ByteCode, b2: ByteCode) -> usize {
         self.push_byte(b1);
-        self.push_byte(b2);
+        self.push_byte(b2)
     }
 
     pub fn load_const(&mut self, c: Constant) -> Result<u8, &'static str> {
@@ -293,16 +293,11 @@ impl VM {
                     }
                     self.stack[offset as usize] = val.clone();
                 },
-                ByteCode::Jump(jump) => {
-                    ip += jump as usize;
-                },
-                ByteCode::JumpIfFalse(jump) => {
+                ByteCode::Jump(dest) => ip = dest,
+                ByteCode::JumpIfFalse(dest) => {
                     if !self.pop().to_bool() {
-                        ip += jump as usize;
+                        ip = dest;
                     }
-                },
-                ByteCode::Loop(jump) => {
-                    ip -= jump as usize;
                 },
             }
             ip += 1;

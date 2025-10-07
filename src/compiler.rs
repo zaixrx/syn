@@ -48,6 +48,7 @@ pub struct Compiler {
     scope_depth: usize,
 
     had_error: bool,
+    in_loop: bool,
 }
 
 impl Compiler {
@@ -59,6 +60,7 @@ impl Compiler {
             locals: Vec::with_capacity(u8::MAX as usize),
             scope_depth: 0,
             had_error: false,
+            in_loop: false,
         }
     }
 
@@ -70,6 +72,7 @@ impl Compiler {
         while self.locals.len() > 0 {
             if self.locals.last().unwrap().scope_depth >= self.scope_depth {
                 self.locals.pop();
+                self.chunk.push_byte(ByteCode::Pop);
             } else {
                 break;
             }
@@ -169,21 +172,23 @@ impl Compiler {
             Token::Print => {
                 self.next()?;
                 self.expression()?;
-                self.chunk.push_byte(ByteCode::Print);
                 self.expect(Token::SemiColon, "expected ';' after statement")?;
+                self.chunk.push_byte(ByteCode::Print);
             },
             Token::LeftBrace => {
                 self.next()?;
                 self.block()?;
                 self.expect(Token::RightBrace, "expected trailing '}'")?;
             },
+            Token::Break => (), // yeah
+            Token::Continue => (), // yeah
             Token::EOF => {
                 self.next()?;
             },
             _ => {
                 self.expression()?;
-                self.chunk.push_byte(ByteCode::Pop);
                 self.expect(Token::SemiColon, "expected ';' after statement")?;
+                self.chunk.push_byte(ByteCode::Pop);
             }
         };
         Ok(())
@@ -198,22 +203,44 @@ impl Compiler {
     fn while_statement(&mut self) -> Result<(), CompilerError> {
         let loop_start = self.chunk.get_count();
         self.expression()?;
-        let begin_base = self.push_jump();
-        self.full_block()?;
-        self.chunk.push_byte(
-            ByteCode::Loop((self.chunk.get_count() - loop_start + 1) as u16)
-        );
-        self.patch_jump(begin_base);
+        let loop_cond = self.chunk.push_byte(ByteCode::JumpIfFalse(0));
+
+        self.expect(Token::LeftBrace, "expected '{' after if condition")?;
+        self.start_scope();
+        let mut break_jumps = Vec::new();
+        loop {
+            self.block_internal()?;
+            match self.curr.tokn {
+                Token::Break => {
+                    break_jumps.push(self.chunk.push_byte(ByteCode::Jump(0)));
+                },
+                Token::Continue => {
+                    self.chunk.push_byte(ByteCode::Jump(loop_start));
+                },
+                _ => break
+            };
+        }
+        self.end_scope();
+        self.expect(Token::RightBrace, "expected trailing '}'")?;
+
+        self.chunk.push_byte(ByteCode::Jump(loop_start));
+
+        self.patch_fjump(loop_cond);
+        while let Some(break_jump) = break_jumps.pop() {
+            self.patch_jump(break_jump);
+        }
+
+        self.in_loop = false;
         Ok(())
     }
 
     fn if_statement(&mut self) -> Result<(), CompilerError> {
         self.expression()?;
-        let if_base = self.push_jump();
+        let if_base = self.chunk.push_byte(ByteCode::JumpIfFalse(0xFFFF));
         self.full_block()?;
         self.load_const(Constant::Bool(false))?;
-        let end_if_base = self.push_jump();
-        self.patch_jump(if_base);
+        let end_if_base = self.chunk.push_byte(ByteCode::JumpIfFalse(0xFFFF));
+        self.patch_fjump(if_base);
         if self.check(Token::Else)? {
             if self.check(Token::If)? {
                 self.if_statement()?;
@@ -221,29 +248,35 @@ impl Compiler {
                 self.full_block()?;
             }
         }
-        self.patch_jump(end_if_base);
+        self.patch_fjump(end_if_base);
         Ok(())
     }
 
-    fn push_jump(&mut self) -> usize {
-        self.chunk.push_byte(ByteCode::JumpIfFalse(0xFFFF));
-        self.chunk.get_count() - 1
+    fn patch_jump(&mut self, idx: usize) {
+        self.chunk.set_byte(idx, ByteCode::Jump(self.chunk.get_count() - 1));
     }
 
-    fn patch_jump(&mut self, cond_offset: usize) {
-        let jump = (self.chunk.get_count() - (cond_offset + 1)) as u16;
-        self.chunk.set_byte(cond_offset, ByteCode::JumpIfFalse(jump));
+    fn patch_fjump(&mut self, idx: usize) {
+        self.chunk.set_byte(idx, ByteCode::JumpIfFalse(self.chunk.get_count() - 1));
     }
 
-    fn block(&mut self) -> Result<(), CompilerError> {
-        self.start_scope();
+    fn block_internal(&mut self) -> Result<(), CompilerError> {
         loop {
             let next = self.peek()?;
             if next.tokn == Token::RightBrace || next.tokn == Token::EOF {
                 break;
             }
             self.declaration()?;
+            if self.curr.tokn == Token::Break || next.tokn == Token::Continue {
+                break;
+            }
         }
+        Ok(())
+    }
+
+    fn block(&mut self) -> Result<(), CompilerError> {
+        self.start_scope();
+        self.block_internal()?;
         self.end_scope();
         Ok(())
     }

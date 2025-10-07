@@ -45,6 +45,8 @@ pub enum Token {
     While,
     Print,
     Let,
+    Break,
+    Continue,
 
     Nil,
     Int(i32),
@@ -249,6 +251,8 @@ impl Lexer {
                     "if" => Token::If,
                     "else" => Token::Else,
                     "while" => Token::While,
+                    "break" => Token::Break,
+                    "continue" => Token::Continue,
                     _ => Token::Identifer
                 }
             },
