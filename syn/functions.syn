@@ -2,16 +2,3 @@ let a = 1;
 func main() {
 	print a;
 }
-
-
-.global:
-	LOAD(0) -> LOAD(Value::String("a"))
-	LOAD(1) -> LOAD(Value::Integer(1))
-	DEF_GLOB
-
-	CALL main // auto generated for every compilation unit
-
-.main:
-	LOAD(0) -> LOAD(Value::String("a"))
-	LOAD_GLOB
-	PRINT

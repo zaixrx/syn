@@ -1,7 +1,6 @@
 search_dir=./syn
 for entry in "$search_dir"/*
 do
-	echo "======"
 	echo "$entry"
  	if [ -d $entry ]; then
  		# run_test $entry
@@ -14,5 +13,7 @@ do
 			exit
  		fi
  	fi
+	clear
 done
+echo "SUCCESS"
 

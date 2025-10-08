@@ -47,6 +47,7 @@ pub enum Token {
     Let,
     Break,
     Continue,
+    Func,
 
     Nil,
     Int(i32),
@@ -253,6 +254,7 @@ impl Lexer {
                     "while" => Token::While,
                     "break" => Token::Break,
                     "continue" => Token::Continue,
+                    "func" => Token::Func,
                     _ => Token::Identifer
                 }
             },

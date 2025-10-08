@@ -11,6 +11,8 @@ use crate::vm::{
     VarType,
 };
 
+const Max_LocalBindings: usize = u8::MAX as usize;
+
 #[derive(PartialEq, PartialOrd)]
 enum Precedence {
     None,
@@ -68,6 +70,7 @@ impl LoopState {
     }
 }
 
+#[allow(dead_code)]
 pub struct Func {
     params: Vec<VarType>,
     chunk: Chunk,
@@ -80,13 +83,14 @@ pub struct Compiler {
     lexer: Lexer,
     curr: TokenHeader,
     had_error: bool,
-    loop_state: LoopState
+    loop_state: LoopState,
     locals: Vec<Local>,
     scope_depth: usize,
 
     func: Func,
 }
 
+// public methods
 impl Compiler {
     pub fn new(src: String) -> Self {
         Self {
@@ -107,22 +111,6 @@ impl Compiler {
         }
     }
 
-    fn start_scope(&mut self) {
-        self.scope_depth += 1;
-    }
-
-    fn end_scope(&mut self) {
-        while self.locals.len() > 0 {
-            if self.locals.last().unwrap().scope_depth >= self.scope_depth {
-                self.locals.pop();
-                self.func.chunk.push_byte(ByteCode::Pop);
-            } else {
-                break;
-            }
-        }
-        self.scope_depth -= 1;
-    }
-
     pub fn compile(mut self) -> Result<Chunk, Vec<CompilerError>> {
         let mut errs = Vec::new();
         loop {
@@ -141,64 +129,25 @@ impl Compiler {
             Ok(self.func.chunk)
         }
     }
+}
 
-    // REFACTOR
-    fn define_local(&mut self) -> Result<(), CompilerError> {
-        if self.locals.len() > u8::MAX as usize {
-            return Err(self.error("exceeded maximum number of local variable definitions."));
-        }
-        for local in self.locals.iter().rev() {
-            if local.scope_depth < self.scope_depth {
-                break;
-            }
-            if local.token.lexm == self.curr.lexm {
-                return Err(self.error("variable identifiers must be unique within the current scope."));
-            }
-        }
-        self.locals.push(Local {
-            token: self.curr.clone(),
-            scope_depth: self.scope_depth
-        });
-        Ok(())
-    }
-
-    // REFATOR
-    fn resolve_local(&self, name: &str) -> i16 { // i16 to cover all [0-255]
-        for (i, local) in self.locals.iter().enumerate().rev() {
-            if local.token.lexm == name {
-                return i as i16;
-            }
-        }
-        -1
-    }
-
+// grammar agnostic methods
+impl Compiler {
     fn declaration(&mut self) -> Result<(), CompilerError> {
         match self.peek()?.tokn {
             Token::Let => {
                 self.next()?;
-                self.expect(Token::Identifer, "expected 'identifer' after 'let'")?;
-                self.define_variable()?;
-                self.expect(Token::SemiColon, "expected ';' after statement")?;
-                Ok(())
+                self.compile_let()?;
             },
-            _ => self.statement()
-        }
-    }
-
-    fn define_variable(&mut self) -> Result<(), CompilerError> {
-        let byte = if self.scope_depth > 0 {
-            self.define_local()?;
-            ByteCode::LDef
-        } else {
-            self.load_const(Constant::String(self.curr.lexm.clone()))?;
-            ByteCode::GDef
+            Token::Func => {
+                self.next()?;
+                self.compile_func()?;
+            },
+            _ => {
+                return self.statement();
+            }
         };
-        if self.check(Token::Equal)? {
-            self.expression()?;
-        } else {
-            self.load_const(Constant::Nil)?;
-        }
-        self.func.chunk.push_byte(byte);
+        self.expect(Token::SemiColon, "expected ';' after statement")?;
         Ok(())
     }
 
@@ -206,39 +155,27 @@ impl Compiler {
         match self.peek()?.tokn {
             Token::If => {
                 self.next()?;
-                self.if_statement()?;
+                self.compile_if()?;
             },
             Token::While => {
                 self.next()?;
-                self.while_statement()?;
+                self.compile_while()?;
             },
             Token::Print => {
                 self.next()?;
-                self.expression()?;
-                self.expect(Token::SemiColon, "expected ';' after statement")?;
-                self.func.chunk.push_byte(ByteCode::Print);
+                self.compile_print()?;
             },
             Token::LeftBrace => {
                 self.next()?;
-                self.block()?;
-                self.expect(Token::RightBrace, "expected trailing '}'")?;
+                self.compile_block()?;
             },
             Token::Break => {
                 self.next()?;
-                self.expect(Token::SemiColon, "expected ';' after statement")?;
-                if !self.loop_state.in_loop {
-                    return Err(self.error("'break' can only be used inside a loop"));
-                }
-                let jump = self.func.chunk.push_byte(ByteCode::Jump(0));
-                self.loop_state.break_jumps.push(jump);
+                self.compile_break()?;
             },
             Token::Continue => {
                 self.next()?;
-                self.expect(Token::SemiColon, "expected ';' after statement")?;
-                if !self.loop_state.in_loop {
-                    return Err(self.error("'continue' can only be used inside a loop"));
-                }
-                self.func.chunk.push_byte(ByteCode::Jump(self.loop_state.start));
+                self.compile_continue()?;
             },
             Token::EOF => {
                 self.next()?;
@@ -252,145 +189,8 @@ impl Compiler {
         Ok(())
     }
 
-    fn full_block(&mut self) -> Result<(), CompilerError> {
-        self.expect(Token::LeftBrace, "expected '{' after if condition")?;
-        self.block()?;
-        self.expect(Token::RightBrace, "expected trailing '}'")
-    }
-
-    fn while_statement(&mut self) -> Result<(), CompilerError> {
-        let loop_start = self.func.chunk.get_count();
-        self.loop_state.start_loop(loop_start);
-        self.expression()?;
-        let loop_cond = self.func.chunk.push_byte(ByteCode::JumpIfFalse(0));
-        self.expect(Token::LeftBrace, "expected '{' after if condition")?;
-        self.block()?;
-        self.expect(Token::RightBrace, "expected trailing '}'")?;
-        self.func.chunk.push_byte(ByteCode::Jump(loop_start));
-        self.patch_fjump(loop_cond);
-        for jump in self.loop_state.break_jumps.iter() {
-            self.func.chunk.set_byte(*jump, ByteCode::Jump(self.func.chunk.get_count()));
-        }
-        self.loop_state.end_loop();
-        Ok(())
-    }
-
-    fn if_statement(&mut self) -> Result<(), CompilerError> {
-        self.expression()?;
-        let if_start = self.func.chunk.push_byte(ByteCode::JumpIfFalse(0));
-        self.full_block()?;
-        let if_end = self.func.chunk.push_byte(ByteCode::Jump(0));
-        self.patch_fjump(if_start);
-        if self.check(Token::Else)? {
-            if self.check(Token::If)? {
-                self.if_statement()?;
-            } else {
-                self.full_block()?;
-            }
-        }
-        self.patch_jump(if_end);
-        Ok(())
-    }
-
-    fn patch_jump(&mut self, idx: usize) {
-        self.func.chunk.set_byte(idx, ByteCode::Jump(self.func.chunk.get_count()));
-    }
-
-    fn patch_fjump(&mut self, idx: usize) {
-        self.func.chunk.set_byte(idx, ByteCode::JumpIfFalse(self.func.chunk.get_count()));
-    }
-
-    fn block(&mut self) -> Result<(), CompilerError> {
-        self.start_scope();
-        loop {
-            let next = self.peek()?.tokn;
-            if next == Token::RightBrace || next == Token::EOF {
-                break;
-            }
-            self.declaration()?;
-        }
-        self.end_scope();
-        Ok(())
-    }
-
     fn expression(&mut self) -> Result<(), CompilerError> {
         self.parse_precedence(Precedence::Assignment)
-    }
-
-    fn literal(&mut self, _: bool) -> Result<(), CompilerError> {
-        // TODO: handle result
-        match self.curr.tokn {
-            Token::Int(val) => self.load_const(Constant::Integer(val))?,
-            Token::Float(val) => self.load_const(Constant::Float(val))?,
-            Token::Bool(val) => self.load_const(Constant::Bool(val))?,
-            Token::String => {
-                let s = &self.curr.lexm[1..self.curr.lexm.len()-1];
-                self.load_const(Constant::String(s.into()))?
-            },
-            Token::Nil => self.load_const(Constant::Nil)?,
-            _ => panic!("Compiler::literal ~ unhandled literal {:?}", self.curr)
-        };
-        Ok(())
-    }
-
-    // REFACTOR
-    fn variable(&mut self, can_assign: bool) -> Result<(), CompilerError> {
-        let offset = self.resolve_local(self.curr.lexm.as_str());
-        if offset == -1 {
-            self.load_const(Constant::String(self.curr.lexm.clone()))?;
-            if can_assign && self.check(Token::Equal)? {
-                self.expression()?;
-                self.func.chunk.push_byte(ByteCode::GSet);
-            } else {
-                self.func.chunk.push_byte(ByteCode::GGet);
-            }
-        } else {
-            if can_assign && self.check(Token::Equal)? {
-                self.expression()?;
-                self.func.chunk.push_byte(ByteCode::LSet(offset as u8));
-            } else {
-                self.func.chunk.push_byte(ByteCode::LGet(offset as u8));
-            }
-        } 
-        Ok(())
-    }
-
-    fn group(&mut self, _: bool) -> Result<(), CompilerError> {
-        self.expression()?;
-        self.expect(Token::RightParen, "expected closing ')'")?;
-        Ok(())
-    }
-
-    fn unary(&mut self, _: bool) -> Result<(), CompilerError> {
-        let op_tok = self.curr.tokn;
-        self.parse_precedence(Precedence::Unary)?;
-        self.func.chunk.push_byte(match op_tok {
-            Token::Minus => ByteCode::Neg,
-            Token::Bang => ByteCode::Not,
-            _ => panic!("Compiler::unary ~ invalid unary operator")
-        });
-        Ok(())
-    }
-
-    fn binary(&mut self, _: bool) -> Result<(), CompilerError> {
-        let op_tok = self.curr.tokn;
-        self.parse_precedence(self.get_rule(op_tok).prec)?;
-        match op_tok {
-            Token::Minus => self.func.chunk.push_byte(ByteCode::Sub),
-            Token::Slash => self.func.chunk.push_byte(ByteCode::Div),
-            Token::Plus => self.func.chunk.push_byte(ByteCode::Add),
-            Token::Star => self.func.chunk.push_byte(ByteCode::Mul),
-            Token::Or => self.func.chunk.push_byte(ByteCode::Or),
-            Token::And => self.func.chunk.push_byte(ByteCode::And),
-            Token::EqualEqual => self.func.chunk.push_byte(ByteCode::Equal),
-            Token::BangEqual => self.func.chunk.push_bytes(ByteCode::Equal, ByteCode::Not),
-            Token::Greater => self.func.chunk.push_byte(ByteCode::Greater),
-            Token::Less => self.func.chunk.push_byte(ByteCode::Less),
-            Token::GreaterEqual => self.func.chunk.push_bytes(ByteCode::Less, ByteCode::Not),
-            Token::LessEqual => self.func.chunk.push_bytes(ByteCode::Greater, ByteCode::Not),
-            _ => return Err(self.error("invalid binary operator"))
-        };
-        Ok(())
     }
 
     fn parse_precedence(&mut self, precedence: Precedence) -> Result<(), CompilerError> {
@@ -427,7 +227,7 @@ impl Compiler {
                 prec: Precedence::Primary,
             },
             Token::Identifer => Rule {
-                prefix: Some(Compiler::variable),
+                prefix: Some(Compiler::identifer),
                 infix: None,
                 prec: Precedence::Primary
             },
@@ -504,6 +304,262 @@ impl Compiler {
             }
         }
     }
+}
+
+// non-expression statement grammar 
+impl Compiler {
+    fn compile_let(&mut self) -> Result<(), CompilerError> {
+        self.expect(Token::Identifer, "expected identifer")?;
+        let byte = if self.scope_depth > 0 {
+            self.push_local()?;
+            ByteCode::LDef
+        } else {
+            self.load_const(Constant::String(self.curr.lexm.clone()))?;
+            ByteCode::GDef
+        };
+        if self.check(Token::Equal)? {
+            self.expression()?;
+        } else {
+            self.load_const(Constant::Nil)?;
+        }
+        self.func.chunk.push_byte(byte);
+        Ok(())
+    }
+
+    fn compile_func(&mut self) -> Result<(), CompilerError> {
+        self.expect(Token::RightParen, "expected disclosing '('")?;
+        loop {
+            let curr = self.peek()?.tokn;
+            if curr == Token::RightParen || curr == Token::EOF {
+                break;
+            }
+            self.expect(Token::Identifer, "expected parameter name")?;
+            self.expect(Token::Colon, "expected ':'")?;
+            self.expect(Token::Identifer, "expected type")?;
+        }
+        self.expect(Token::RightParen, "expected enclosing ')'")?;
+        self.compile_forced_block()?;
+        Ok(())
+    }
+
+    fn compile_while(&mut self) -> Result<(), CompilerError> {
+        self.loop_state.start_loop(self.func.chunk.get_count());
+        self.expression()?;
+        let loop_cond = self.func.chunk.push_byte(ByteCode::JumpIfFalse(0));
+        self.compile_forced_block()?;
+        self.func.chunk.push_byte(ByteCode::Jump(self.loop_state.start));
+        self.patch_fjump(loop_cond);
+        for jump in self.loop_state.break_jumps.iter() {
+            self.func.chunk.set_byte(*jump, ByteCode::Jump(self.func.chunk.get_count()));
+        }
+        self.loop_state.end_loop();
+        Ok(())
+    }
+
+    fn compile_if(&mut self) -> Result<(), CompilerError> {
+        self.expression()?;
+        let if_start = self.func.chunk.push_byte(ByteCode::JumpIfFalse(0));
+        self.compile_forced_block()?;
+        let if_end = self.func.chunk.push_byte(ByteCode::Jump(0));
+        self.patch_fjump(if_start);
+        if self.check(Token::Else)? {
+            if self.check(Token::If)? {
+                self.compile_if()?;
+            } else {
+                self.compile_forced_block()?;
+            }
+        }
+        self.patch_jump(if_end);
+        Ok(())
+    }
+
+    fn compile_forced_block(&mut self) -> Result<(), CompilerError> {
+        self.expect(Token::LeftBrace, "expected enclosing '{'")?;
+        self.compile_block()
+    }
+
+    fn compile_block(&mut self) -> Result<(), CompilerError> {
+        self.start_scope();
+        loop {
+            let next = self.peek()?.tokn;
+            if next == Token::RightBrace || next == Token::EOF {
+                break;
+            }
+            self.declaration()?;
+        }
+        self.end_scope();
+        self.expect(Token::RightBrace, "expected trailing '}'")?;
+        Ok(())
+    }
+
+    fn compile_break(&mut self) -> Result<(), CompilerError> {
+        self.expect(Token::SemiColon, "expected ';' after statement")?;
+        if !self.loop_state.in_loop {
+            return Err(self.error("'break' can only be used inside a loop"));
+        }
+        let jump = self.func.chunk.push_byte(ByteCode::Jump(0));
+        self.loop_state.break_jumps.push(jump);
+        Ok(())
+    }
+
+    fn compile_continue(&mut self) -> Result<(), CompilerError> {
+        self.expect(Token::SemiColon, "expected ';' after statement")?;
+        if !self.loop_state.in_loop {
+            return Err(self.error("'continue' can only be used inside a loop"));
+        }
+        self.func.chunk.push_byte(ByteCode::Jump(self.loop_state.start));
+        Ok(())
+    }
+
+    fn compile_print(&mut self) -> Result<(), CompilerError> {
+        self.expression()?;
+        self.expect(Token::SemiColon, "expected ';' after statement")?;
+        self.func.chunk.push_byte(ByteCode::Print);
+        Ok(())
+    }
+}
+
+// expression statement grammar
+impl Compiler {
+    fn literal(&mut self, _: bool) -> Result<(), CompilerError> {
+        // TODO: handle result
+        match self.curr.tokn {
+            Token::Int(val) => self.load_const(Constant::Integer(val))?,
+            Token::Float(val) => self.load_const(Constant::Float(val))?,
+            Token::Bool(val) => self.load_const(Constant::Bool(val))?,
+            Token::String => {
+                let s = &self.curr.lexm[1..self.curr.lexm.len()-1];
+                self.load_const(Constant::String(s.into()))?
+            },
+            Token::Nil => self.load_const(Constant::Nil)?,
+            _ => panic!("Compiler::literal ~ unhandled literal {:?}", self.curr)
+        };
+        Ok(())
+    }
+
+    // REFACTOR
+    fn identifer(&mut self, can_assign: bool) -> Result<(), CompilerError> {
+        let offset = self.resolve_local(self.curr.lexm.as_str());
+        if offset == -1 {
+            self.load_const(Constant::String(self.curr.lexm.clone()))?;
+            if can_assign && self.check(Token::Equal)? {
+                self.expression()?;
+                self.func.chunk.push_byte(ByteCode::GSet);
+            } else {
+                self.func.chunk.push_byte(ByteCode::GGet);
+            }
+        } else {
+            if can_assign && self.check(Token::Equal)? {
+                self.expression()?;
+                self.func.chunk.push_byte(ByteCode::LSet(offset as u8));
+            } else {
+                self.func.chunk.push_byte(ByteCode::LGet(offset as u8));
+            }
+        } 
+        Ok(())
+    }
+
+    fn group(&mut self, _: bool) -> Result<(), CompilerError> {
+        self.expression()?;
+        self.expect(Token::RightParen, "expected closing ')'")?;
+        Ok(())
+    }
+
+    fn unary(&mut self, _: bool) -> Result<(), CompilerError> {
+        let op_tok = self.curr.tokn;
+        self.parse_precedence(Precedence::Unary)?;
+        self.func.chunk.push_byte(match op_tok {
+            Token::Minus => ByteCode::Neg,
+            Token::Bang => ByteCode::Not,
+            _ => panic!("Compiler::unary ~ invalid unary operator")
+        });
+        Ok(())
+    }
+
+    fn binary(&mut self, _: bool) -> Result<(), CompilerError> {
+        let op_tok = self.curr.tokn;
+        self.parse_precedence(self.get_rule(op_tok).prec)?;
+        match op_tok {
+            Token::Minus => self.func.chunk.push_byte(ByteCode::Sub),
+            Token::Slash => self.func.chunk.push_byte(ByteCode::Div),
+            Token::Plus => self.func.chunk.push_byte(ByteCode::Add),
+            Token::Star => self.func.chunk.push_byte(ByteCode::Mul),
+            Token::Or => self.func.chunk.push_byte(ByteCode::Or),
+            Token::And => self.func.chunk.push_byte(ByteCode::And),
+            Token::EqualEqual => self.func.chunk.push_byte(ByteCode::Equal),
+            Token::BangEqual => self.func.chunk.push_bytes(ByteCode::Equal, ByteCode::Not),
+            Token::Greater => self.func.chunk.push_byte(ByteCode::Greater),
+            Token::Less => self.func.chunk.push_byte(ByteCode::Less),
+            Token::GreaterEqual => self.func.chunk.push_bytes(ByteCode::Less, ByteCode::Not),
+            Token::LessEqual => self.func.chunk.push_bytes(ByteCode::Greater, ByteCode::Not),
+            _ => return Err(self.error("invalid binary operator"))
+        };
+        Ok(())
+    }
+}
+
+// helpers
+impl Compiler {
+    fn start_scope(&mut self) {
+        self.scope_depth += 1;
+    }
+
+    fn end_scope(&mut self) {
+        while self.locals.len() > 0 {
+            if self.locals.last().unwrap().scope_depth >= self.scope_depth {
+                self.locals.pop();
+                self.func.chunk.push_byte(ByteCode::Pop);
+            } else {
+                break;
+            }
+        }
+        self.scope_depth -= 1;
+    }
+
+    // REFACTOR
+    fn push_local(&mut self) -> Result<(), CompilerError> {
+        if self.locals.len() > Max_LocalBindings {
+            return Err(self.error("exceeded maximum number of local variable definitions."));
+        }
+        for local in self.locals.iter().rev() {
+            if local.scope_depth < self.scope_depth {
+                break;
+            }
+            if local.token.lexm == self.curr.lexm {
+                return Err(self.error("variable identifiers must be unique within the current scope."));
+            }
+        }
+        self.locals.push(Local {
+            token: self.curr.clone(),
+            scope_depth: self.scope_depth
+        });
+        Ok(())
+    }
+
+    // REFATOR
+    fn resolve_local(&self, name: &str) -> i16 { // i16 to cover all [0-255]
+        for (i, local) in self.locals.iter().enumerate().rev() {
+            if local.token.lexm == name {
+                return i as i16;
+            }
+        }
+        -1
+    }
+
+    fn patch_jump(&mut self, idx: usize) {
+        self.func.chunk.set_byte(idx, ByteCode::Jump(self.func.chunk.get_count()));
+    }
+
+    fn patch_fjump(&mut self, idx: usize) {
+        self.func.chunk.set_byte(idx, ByteCode::JumpIfFalse(self.func.chunk.get_count()));
+    }
+
+    fn load_const(&mut self, v: Constant) -> Result<u8, CompilerError> {
+        match self.func.chunk.load_const(v) {
+            Ok(idx) => Ok(idx),
+            Err(e) => Err(self.error(e))
+        }
+    }
 
     fn next(&mut self) -> Result<(), CompilerError> {
         match self.lexer.next() {
@@ -538,13 +594,6 @@ impl Compiler {
             Ok(true)
         } else {
             Ok(false)
-        }
-    }
-
-    fn load_const(&mut self, v: Constant) -> Result<u8, CompilerError> {
-        match self.func.chunk.load_const(v) {
-            Ok(idx) => Ok(idx),
-            Err(e) => Err(self.error(e))
         }
     }
 

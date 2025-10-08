@@ -1,15 +1,3 @@
-// {
-// 	let a_1 = 1;
-// 	{
-// 		let a = 2;
-// 		print a;
-// 	}
-// 	let a_2 = 3;
-// 
-// 	print a_1;
-// 	print a_2;
-// }
-
 {
 	let a = 100;
 	{
