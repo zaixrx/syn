@@ -1,6 +1,6 @@
-let const Max = 100;
+let const Max = 100.0;
 
-func fib(max: int) {
+func fib(max: Int) -> Int {
 	let a = 1;
 	let b = 1;
 	while a < Max {

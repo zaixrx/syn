@@ -72,10 +72,21 @@ impl LoopState {
 
 #[allow(dead_code)]
 pub struct Func {
-    params: Vec<VarType>,
+    arity: usize,
     chunk: Chunk,
     name: String,
     retype: VarType,
+}
+
+impl Func {
+    fn new(name: String) -> Self {
+        Self {
+            name,
+            arity: 0,
+            chunk: Chunk::new(),
+            retype: VarType::None,
+        }
+    }
 }
 
 // TODO: add panic mode
@@ -327,19 +338,43 @@ impl Compiler {
     }
 
     fn compile_func(&mut self) -> Result<(), CompilerError> {
+        self.expect(Token::Identifer, "expected function name")?;
+        self.func = Func::new(self.curr.lexm.clone());
+        self.func.arity = self.compile_params()?;
+        if self.check(Token::RightArrow)? {
+            self.func.retype = self.compile_type()?;
+        }
+        self.compile_forced_block()?;
+        Ok(())
+    }
+
+    fn compile_params(&mut self) -> Result<usize, CompilerError> {
+        let mut count = 0;
         self.expect(Token::RightParen, "expected disclosing '('")?;
         loop {
             let curr = self.peek()?.tokn;
             if curr == Token::RightParen || curr == Token::EOF {
                 break;
             }
+            // TODO: push as local variable
             self.expect(Token::Identifer, "expected parameter name")?;
             self.expect(Token::Colon, "expected ':'")?;
-            self.expect(Token::Identifer, "expected type")?;
+            self.compile_type()?;
+            count += 1;
         }
         self.expect(Token::RightParen, "expected enclosing ')'")?;
-        self.compile_forced_block()?;
-        Ok(())
+        Ok(count)
+    }
+
+    fn compile_type(&mut self) -> Result<VarType, CompilerError> {
+        self.expect(Token::Identifer, "expected type")?;
+        Ok(match self.curr.tokn {
+            Token::Int_T   => VarType::Integer,
+            Token::Float_T => VarType::Float,
+            Token::Bool_T  => VarType::Bool,
+            Token::Str_T   => VarType::String,
+            _ => return Err(self.error("got unexpected type")),
+        })
     }
 
     fn compile_while(&mut self) -> Result<(), CompilerError> {
@@ -516,7 +551,7 @@ impl Compiler {
         self.scope_depth -= 1;
     }
 
-    // REFACTOR
+    // requires identifier to be parsed
     fn push_local(&mut self) -> Result<(), CompilerError> {
         if self.locals.len() > Max_LocalBindings {
             return Err(self.error("exceeded maximum number of local variable definitions."));

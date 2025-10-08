@@ -56,6 +56,12 @@ pub enum Token {
     String,
     Identifer,
 
+    IntT,
+    FloatT,
+    StrT,
+    BoolT,
+    RightArrow,
+
     EOF,
 }
 
@@ -170,7 +176,13 @@ impl Lexer {
             '{' => Token::LeftBrace,
             '}' => Token::RightBrace,
             ';' => Token::SemiColon,
-            '-' => Token::Minus,
+            '-' => {
+                if self.match_char('>') {
+                    Token::RightArrow
+                } else {
+                    Token::Minus
+                }
+            },
             '/' => {
                 if self.match_char('/') {
                     self.curr += self.src[self.curr..].find('\n')
@@ -255,6 +267,10 @@ impl Lexer {
                     "break" => Token::Break,
                     "continue" => Token::Continue,
                     "func" => Token::Func,
+                    "Int" => Token::Int_T,
+                    "Float" => Token::Float_T,
+                    "Str" => Token::Str_T,
+                    "Bool" => Token::Bool_T,
                     _ => Token::Identifer
                 }
             },

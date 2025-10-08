@@ -1,4 +1,13 @@
-let a = 1;
+func fib(max: Int) -> Int {
+	let a = 1;
+	let b = 1;
+	while a < Max {
+	    a = a + b;
+	    b = a - b;
+	}
+	// return a;
+}
+
 func main() {
 	print a;
 }
