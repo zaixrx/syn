@@ -1,16 +1,16 @@
-// extern fn print(msg: string);
+let const Max = 100;
 
-// fn main() {
-{
+func fib(max: int) {
 	let a = 1;
 	let b = 1;
-
-	while a < 100 {
+	while a < Max {
 	    a = a + b;
 	    b = a - b;
 	}
-	print(a);
+	return a;
+}
 
-	let message = "hello world";
-	print(message);
+func main() {
+	let y = fib(Max);
+	printf("fib(x) < {Max}: {a}");
 }

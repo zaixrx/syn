@@ -50,7 +50,7 @@ impl Constant {
 }
 
 #[derive(PartialEq)]
-enum VarType {
+pub enum VarType {
     Integer,
     Float,
     Bool,
@@ -66,7 +66,8 @@ struct Var {
 #[repr(u8)]
 #[derive(Debug, Copy, Clone)]
 pub enum ByteCode {
-    Load(u8),
+    Push(u8),
+    Pop,
 
     Add,
     Sub,
@@ -82,7 +83,6 @@ pub enum ByteCode {
     And,
 
     Print,
-    Pop,
 
     GDef,
     GGet,
@@ -133,7 +133,7 @@ impl Chunk {
         if index > 0xFF {
             Err("can't define more than 255 constants in one chunks")
         } else {
-            self.push_byte(ByteCode::Load(index as u8));
+            self.push_byte(ByteCode::Push(index as u8));
             self.consts.push(c);
             Ok(index as u8)
         }
@@ -142,8 +142,8 @@ impl Chunk {
     pub fn disassemble_one(&self, idx: usize) {
         print!("{:?} :: ", idx);
         match self.bytes[idx] {
-            ByteCode::Load(i) => {
-                println!("Load {} --> {:?}", i, self.consts[i as usize]);
+            ByteCode::Push(i) => {
+                println!("Push {} --> {:?}", i, self.consts[i as usize]);
             },
             byte => println!("{:?}", byte)
         };
@@ -189,7 +189,7 @@ impl VM {
             let byte = self.chunk.bytes[ip];
             // self.chunk.disassemble_one(ip);
             match byte {
-                ByteCode::Load(i) => {
+                ByteCode::Push(i) => {
                     if i as usize >= self.chunk.consts.len() {
                         return Err("constant doesn't exist");
                     }
