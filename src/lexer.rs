@@ -45,9 +45,10 @@ pub enum Token {
     While,
     Print,
     Let,
+    Func,
     Break,
     Continue,
-    Func,
+    Return,
 
     Nil,
     Int(i32),
@@ -111,7 +112,7 @@ impl Lexer {
     }
 
     fn consume_id(&mut self) {
-        self.curr = match self.src[self.curr..].find(|c: char| !c.is_ascii_alphanumeric()) {
+        self.curr = match self.src[self.curr..].find(|c: char| !(c.is_ascii_alphanumeric())) {
             Some(end) => self.curr + end,
             None => self.src.len()
         };
@@ -266,6 +267,7 @@ impl Lexer {
                     "while" => Token::While,
                     "break" => Token::Break,
                     "continue" => Token::Continue,
+                    "return" => Token::Return,
                     "func" => Token::Func,
                     "Int" => Token::IntT,
                     "Float" => Token::FloatT,

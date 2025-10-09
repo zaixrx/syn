@@ -1,3 +1,4 @@
+// TODO: make global variables work
 use crate::lexer::{
     Lexer,
     Token,
@@ -15,11 +16,12 @@ use crate::vm::{
 pub struct Compiler {
     lexer: Lexer,
     curr: TokenHeader,
-    had_error: bool,
     loop_state: LoopState,
     locals: Vec<Local>,
     scope_depth: usize,
     func: Option<Func>,
+    had_error: bool,
+    panic_mode: bool,
     prog: Chunk
 }
 
@@ -63,12 +65,13 @@ impl Compiler {
         Self {
             lexer: Lexer::new(src),
             curr: TokenHeader { tokn: Token::EOF, coln: 0, line: 0, lexm: String::new() },
-            had_error: false,
             scope_depth: 0,
             loop_state: LoopState::new(),
             locals: Vec::with_capacity(MAX_LOCAL_BINDINGS),
             func: None,
             prog: Chunk::new(),
+            had_error: false,
+            panic_mode: false,
         }
     }
 
@@ -80,8 +83,8 @@ impl Compiler {
                 Err(err) => {
                     errs.push(err);
                     self.had_error = true;
-                    if let Err(err) = self.synchronize() {
-                        errs.push(err);
+                    if !self.synchronize() {
+                        return Err(errs);
                     }
                 }
             };
@@ -94,20 +97,37 @@ impl Compiler {
         }
     }
 
-    fn synchronize(&mut self) -> Result<(), CompilerError> {
+    fn synchronize(&mut self) -> bool {
+        self.panic_mode = false;
+        let mut prev;
         loop {
-            match self.peek()?.tokn {
-                Token::RightParen |
-                Token::RightBrace |
-                Token::SemiColon => {
-                    self.next()?
+            if self.curr.tokn == Token::EOF {
+                return true;
+            }
+            prev = match self.peek() {
+                Ok(t) => {
+                    t.tokn
                 },
-                _ => {
-                    break;
+                Err(_) => {
+                    return false
                 }
             };
+            match prev {
+                Token::Func   |
+                Token::Let    |
+                Token::If     |
+                Token::While  |
+                Token::Print  |
+                Token::Return => return true,
+                _ => ()
+            };
+            if self.next().is_err() {
+                return false;
+            };
+            if prev == Token::SemiColon {
+                return true;
+            }
         }
-        Ok(())
     }
 }
 
@@ -310,7 +330,7 @@ impl Compiler {
         if self.func.is_some() {
             return Err(self.error("can't have function inside function"))
         }
-        self.expect(Token::Identifer, "expected function name")?;
+        self.expect(Token::Identifer, "expected the function's name")?;
         self.func = Some(Func::new(self.curr.lexm.clone()));
         let arity = self.compile_params()?;
         let retype = if self.check(Token::RightArrow)? {
@@ -326,7 +346,6 @@ impl Compiler {
         }
         self.compile_forced_block()?;
         let func = self.func.take().unwrap();
-        dbg!(&func);
         match self.prog.load_const(Constant::Function(func)) {
             Ok(idx) => idx,
             Err(msg) => return Err(self.error(msg))
@@ -344,7 +363,7 @@ impl Compiler {
             }
             // TODO: push as local variable
             self.expect(Token::Identifer, "expected parameter name")?;
-            self.expect(Token::Colon, "expected ':'")?;
+            self.expect(Token::Colon, "expected ':' param type seperator")?;
             self.compile_type()?;
             count += 1;
         }
@@ -353,14 +372,15 @@ impl Compiler {
     }
 
     fn compile_type(&mut self) -> Result<VarType, CompilerError> {
-        self.expect(Token::Identifer, "expected type")?;
-        Ok(match self.curr.tokn {
+        let typ = match self.peek()?.tokn {
             Token::IntT   => VarType::Integer,
             Token::FloatT => VarType::Float,
             Token::BoolT  => VarType::Bool,
             Token::StrT   => VarType::String,
-            _ => return Err(self.error("got unexpected type")),
-        })
+            _ => return Err(self.error("expected valid type")),
+        };
+        self.next()?;
+        Ok(typ)
     }
 
     fn compile_while(&mut self) -> Result<(), CompilerError> {

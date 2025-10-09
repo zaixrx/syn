@@ -1,3 +1,13 @@
+func fib(upper: Int) -> Int {
+ 	let a = 1;
+ 	let b = 1;
+ 	while a < upper {
+ 		a = a + b;
+ 		b = a - b;
+ 	}
+ 	// return a;
+}
+
 func main() {
 	let a = 1;
 	print a;
