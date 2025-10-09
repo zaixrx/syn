@@ -1,11 +1,14 @@
 use std::collections::HashMap;
+use crate::compiler::Func;
 
-#[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum Constant {
     Integer(i32),
     Float(f64),
     Bool(bool),
     String(String),
+    Function(Func),
     Nil
 }
 
@@ -44,20 +47,23 @@ impl Constant {
             Constant::Float(_) => VarType::Float,
             Constant::Bool(_) => VarType::Bool,
             Constant::String(_) => VarType::String,
+            Constant::Function(_) => VarType::Function,
             Constant::Nil => VarType::None,
         }
     }
 }
 
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum VarType {
     Integer,
     Float,
     Bool,
     String,
+    Function,
     None 
 }
 
+#[derive(Debug)]
 struct Var {
     typ: VarType,
     val: Constant
@@ -95,37 +101,36 @@ pub enum ByteCode {
     JumpIfFalse(usize),
 }
 
+#[derive(Clone, Debug)]
 pub struct Chunk {
     consts: Vec<Constant>,
-    globals: HashMap<String, Var>,
-    bytes: Vec<ByteCode>,
+    code: Vec<ByteCode>,
 }
 
 impl Chunk {
     pub fn new() -> Self {
         Self {
             consts: Vec::new(),
-            globals: HashMap::new(),
-            bytes: Vec::new(),
+            code: Vec::new(),
         }
     }
 
-    pub fn get_count(&self) -> usize {
-        self.bytes.len()
+    pub fn count(&self) -> usize {
+        self.code.len()
     }
 
-    pub fn push_byte(&mut self, b: ByteCode) -> usize {
-        self.bytes.push(b);
-        self.bytes.len() - 1
+    pub fn push(&mut self, b: ByteCode) -> usize {
+        self.code.push(b);
+        self.code.len() - 1
     }
 
-    pub fn set_byte(&mut self, offset: usize, b: ByteCode) {
-        self.bytes[offset] = b;
+    pub fn pushs(&mut self, b1: ByteCode, b2: ByteCode) -> usize {
+        self.push(b1);
+        self.push(b2)
     }
-    
-    pub fn push_bytes(&mut self, b1: ByteCode, b2: ByteCode) -> usize {
-        self.push_byte(b1);
-        self.push_byte(b2)
+
+    pub fn set(&mut self, offset: usize, b: ByteCode) {
+        self.code[offset] = b;
     }
 
     pub fn load_const(&mut self, c: Constant) -> Result<u8, &'static str> {
@@ -133,7 +138,7 @@ impl Chunk {
         if index > 0xFF {
             Err("can't define more than 255 constants in one chunks")
         } else {
-            self.push_byte(ByteCode::Push(index as u8));
+            self.push(ByteCode::Push(index as u8));
             self.consts.push(c);
             Ok(index as u8)
         }
@@ -141,7 +146,7 @@ impl Chunk {
 
     pub fn disassemble_one(&self, idx: usize) {
         print!("{:?} :: ", idx);
-        match self.bytes[idx] {
+        match self.code[idx] {
             ByteCode::Push(i) => {
                 println!("Push {} --> {:?}", i, self.consts[i as usize]);
             },
@@ -151,7 +156,7 @@ impl Chunk {
 
     pub fn disassemble(&self) {
         println!("=======");
-        for i in 0..self.bytes.len() {
+        for i in 0..self.code.len() {
             self.disassemble_one(i);
         }
         println!("=======");
@@ -160,7 +165,8 @@ impl Chunk {
 
 pub struct VM {
     chunk: Chunk,
-    stack: Vec<Constant>
+    stack: Vec<Constant>,
+    globals: HashMap<String, Var>,
 }
 
 impl VM {
@@ -168,6 +174,7 @@ impl VM {
         VM {
             chunk,
             stack: Vec::new(),
+            globals: HashMap::new(),
         }
     }
 
@@ -185,8 +192,8 @@ impl VM {
 
     pub fn exec(&mut self) -> Result<(), &'static str> {
         let mut ip = 0;
-        while ip < self.chunk.get_count() {
-            let byte = self.chunk.bytes[ip];
+        while ip < self.chunk.count() {
+            let byte = self.chunk.code[ip];
             // self.chunk.disassemble_one(ip);
             match byte {
                 ByteCode::Push(i) => {
@@ -255,14 +262,14 @@ impl VM {
                 ByteCode::GDef => {
                     let val = self.pop();
                     let name = self.pop().expect_string();
-                    self.chunk.globals.insert(name.into(), Var {
+                    self.globals.insert(name.into(), Var {
                         typ: val.get_var_type(),
                         val
                     });
                 },
                 ByteCode::GGet => {
                     let name = self.pop().expect_string();
-                    match self.chunk.globals.get(&name) {
+                    match self.globals.get(&name) {
                         Some(var) => {
                             if var.typ == VarType::None {
                                 return Err("can't use unintialized variable");
@@ -275,13 +282,13 @@ impl VM {
                 ByteCode::GSet => {
                     let val = self.pop();
                     let name = self.pop().expect_string();
-                    match self.chunk.globals.get(&name) {
+                    match self.globals.get(&name) {
                         Some(var) => {
                             // TODO: typechecking on every access is tedious
                             if val.get_var_type() != var.typ {
                                 return Err("mismatched types");
                             }
-                            self.chunk.globals.insert(name.into(), Var {
+                            self.globals.insert(name.into(), Var {
                                 typ: val.get_var_type(),
                                 val: val.clone()
                             });
@@ -319,6 +326,7 @@ impl std::fmt::Display for Constant {
             Constant::Float(val) => write!(f, "{}", val),
             Constant::Bool(val) => write!(f, "{}", val),
             Constant::String(val) => write!(f, "{}", val),
+            Constant::Function(val) => write!(f, "Func<{}>", val.name),
             Constant::Nil => write!(f, "nil"),
         }
     }

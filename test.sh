@@ -1,19 +1,32 @@
-search_dir=./syn
-for entry in "$search_dir"/*
-do
-	echo "$entry"
- 	if [ -d $entry ]; then
- 		# run_test $entry
-		echo "directory $entry"
- 	else
- 		if cargo run -- $entry; then
-			echo "SUCCESS"
-		else
-			echo "FAILURE"
-			exit
- 		fi
- 	fi
-	clear
-done
-echo "SUCCESS"
+error_out() {
+	echo -e "\033[0;31m"
+	echo "$1"
+	echo -e "\033[0m"
+}
 
+success_out() {
+	echo -e "\033[0;32m"
+	echo "$1"
+	echo -e "\033[0m"
+}
+
+lookup() {
+	for entry in "$1"/*
+	do
+		if [ -d $entry ]; then
+			lookup $entry
+		else
+			echo "cargo run -- $entry"
+			if cargo run -- $entry; then
+				success_out "$entry: Succeeded"
+			else
+				error_out "$entry: Failed"
+				exit
+			fi
+		fi
+		clear
+	done
+	success_out "All the tests passed successfully"
+}
+
+lookup "./syn"

@@ -267,10 +267,10 @@ impl Lexer {
                     "break" => Token::Break,
                     "continue" => Token::Continue,
                     "func" => Token::Func,
-                    "Int" => Token::Int_T,
-                    "Float" => Token::Float_T,
-                    "Str" => Token::Str_T,
-                    "Bool" => Token::Bool_T,
+                    "Int" => Token::IntT,
+                    "Float" => Token::FloatT,
+                    "Str" => Token::StrT,
+                    "Bool" => Token::BoolT,
                     _ => Token::Identifer
                 }
             },

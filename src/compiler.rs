@@ -11,7 +11,7 @@ use crate::vm::{
     VarType,
 };
 
-const Max_LocalBindings: usize = u8::MAX as usize;
+const MAX_LOCAL_BINDINGS: usize = u8::MAX as usize;
 
 #[derive(PartialEq, PartialOrd)]
 enum Precedence {
@@ -70,12 +70,20 @@ impl LoopState {
     }
 }
 
-#[allow(dead_code)]
+#[derive(Clone, Debug)]
 pub struct Func {
-    arity: usize,
-    chunk: Chunk,
-    name: String,
-    retype: VarType,
+    pub arity: usize,
+    pub name: String,
+    pub chunk: Chunk,
+    pub retype: VarType,
+}
+
+impl PartialEq for Func {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name &&
+        self.arity == other.arity &&
+        self.retype == other.retype
+    }
 }
 
 impl Func {
@@ -112,13 +120,8 @@ impl Compiler {
             loop_state: LoopState::new(),
             had_error: false,
 
-            func: Func {
-                params: Vec::new(),
-                chunk: Chunk::new(),
-                name: String::from("main"),
-                retype: VarType::None,
-            }, 
-            locals: Vec::with_capacity(u8::MAX as usize),
+            func: Func::new(String::from("main")),
+            locals: Vec::with_capacity(MAX_LOCAL_BINDINGS),
         }
     }
 
@@ -158,7 +161,6 @@ impl Compiler {
                 return self.statement();
             }
         };
-        self.expect(Token::SemiColon, "expected ';' after statement")?;
         Ok(())
     }
 
@@ -194,7 +196,7 @@ impl Compiler {
             _ => {
                 self.expression()?;
                 self.expect(Token::SemiColon, "expected ';' after statement")?;
-                self.func.chunk.push_byte(ByteCode::Pop);
+                self.func.chunk.push(ByteCode::Pop);
             }
         };
         Ok(())
@@ -333,7 +335,8 @@ impl Compiler {
         } else {
             self.load_const(Constant::Nil)?;
         }
-        self.func.chunk.push_byte(byte);
+        self.func.chunk.push(byte);
+        self.expect(Token::SemiColon, "expected ';' after statement")?;
         Ok(())
     }
 
@@ -350,7 +353,7 @@ impl Compiler {
 
     fn compile_params(&mut self) -> Result<usize, CompilerError> {
         let mut count = 0;
-        self.expect(Token::RightParen, "expected disclosing '('")?;
+        self.expect(Token::LeftParen, "expected disclosing '('")?;
         loop {
             let curr = self.peek()?.tokn;
             if curr == Token::RightParen || curr == Token::EOF {
@@ -369,23 +372,23 @@ impl Compiler {
     fn compile_type(&mut self) -> Result<VarType, CompilerError> {
         self.expect(Token::Identifer, "expected type")?;
         Ok(match self.curr.tokn {
-            Token::Int_T   => VarType::Integer,
-            Token::Float_T => VarType::Float,
-            Token::Bool_T  => VarType::Bool,
-            Token::Str_T   => VarType::String,
+            Token::IntT   => VarType::Integer,
+            Token::FloatT => VarType::Float,
+            Token::BoolT  => VarType::Bool,
+            Token::StrT   => VarType::String,
             _ => return Err(self.error("got unexpected type")),
         })
     }
 
     fn compile_while(&mut self) -> Result<(), CompilerError> {
-        self.loop_state.start_loop(self.func.chunk.get_count());
+        self.loop_state.start_loop(self.func.chunk.count());
         self.expression()?;
-        let loop_cond = self.func.chunk.push_byte(ByteCode::JumpIfFalse(0));
+        let loop_cond = self.func.chunk.push(ByteCode::JumpIfFalse(0));
         self.compile_forced_block()?;
-        self.func.chunk.push_byte(ByteCode::Jump(self.loop_state.start));
+        self.func.chunk.push(ByteCode::Jump(self.loop_state.start));
         self.patch_fjump(loop_cond);
         for jump in self.loop_state.break_jumps.iter() {
-            self.func.chunk.set_byte(*jump, ByteCode::Jump(self.func.chunk.get_count()));
+            self.func.chunk.set(*jump, ByteCode::Jump(self.func.chunk.count()));
         }
         self.loop_state.end_loop();
         Ok(())
@@ -393,9 +396,9 @@ impl Compiler {
 
     fn compile_if(&mut self) -> Result<(), CompilerError> {
         self.expression()?;
-        let if_start = self.func.chunk.push_byte(ByteCode::JumpIfFalse(0));
+        let if_start = self.func.chunk.push(ByteCode::JumpIfFalse(0));
         self.compile_forced_block()?;
-        let if_end = self.func.chunk.push_byte(ByteCode::Jump(0));
+        let if_end = self.func.chunk.push(ByteCode::Jump(0));
         self.patch_fjump(if_start);
         if self.check(Token::Else)? {
             if self.check(Token::If)? {
@@ -432,7 +435,7 @@ impl Compiler {
         if !self.loop_state.in_loop {
             return Err(self.error("'break' can only be used inside a loop"));
         }
-        let jump = self.func.chunk.push_byte(ByteCode::Jump(0));
+        let jump = self.func.chunk.push(ByteCode::Jump(0));
         self.loop_state.break_jumps.push(jump);
         Ok(())
     }
@@ -442,14 +445,14 @@ impl Compiler {
         if !self.loop_state.in_loop {
             return Err(self.error("'continue' can only be used inside a loop"));
         }
-        self.func.chunk.push_byte(ByteCode::Jump(self.loop_state.start));
+        self.func.chunk.push(ByteCode::Jump(self.loop_state.start));
         Ok(())
     }
 
     fn compile_print(&mut self) -> Result<(), CompilerError> {
         self.expression()?;
         self.expect(Token::SemiColon, "expected ';' after statement")?;
-        self.func.chunk.push_byte(ByteCode::Print);
+        self.func.chunk.push(ByteCode::Print);
         Ok(())
     }
 }
@@ -479,16 +482,16 @@ impl Compiler {
             self.load_const(Constant::String(self.curr.lexm.clone()))?;
             if can_assign && self.check(Token::Equal)? {
                 self.expression()?;
-                self.func.chunk.push_byte(ByteCode::GSet);
+                self.func.chunk.push(ByteCode::GSet);
             } else {
-                self.func.chunk.push_byte(ByteCode::GGet);
+                self.func.chunk.push(ByteCode::GGet);
             }
         } else {
             if can_assign && self.check(Token::Equal)? {
                 self.expression()?;
-                self.func.chunk.push_byte(ByteCode::LSet(offset as u8));
+                self.func.chunk.push(ByteCode::LSet(offset as u8));
             } else {
-                self.func.chunk.push_byte(ByteCode::LGet(offset as u8));
+                self.func.chunk.push(ByteCode::LGet(offset as u8));
             }
         } 
         Ok(())
@@ -503,7 +506,7 @@ impl Compiler {
     fn unary(&mut self, _: bool) -> Result<(), CompilerError> {
         let op_tok = self.curr.tokn;
         self.parse_precedence(Precedence::Unary)?;
-        self.func.chunk.push_byte(match op_tok {
+        self.func.chunk.push(match op_tok {
             Token::Minus => ByteCode::Neg,
             Token::Bang => ByteCode::Not,
             _ => panic!("Compiler::unary ~ invalid unary operator")
@@ -515,18 +518,18 @@ impl Compiler {
         let op_tok = self.curr.tokn;
         self.parse_precedence(self.get_rule(op_tok).prec)?;
         match op_tok {
-            Token::Minus => self.func.chunk.push_byte(ByteCode::Sub),
-            Token::Slash => self.func.chunk.push_byte(ByteCode::Div),
-            Token::Plus => self.func.chunk.push_byte(ByteCode::Add),
-            Token::Star => self.func.chunk.push_byte(ByteCode::Mul),
-            Token::Or => self.func.chunk.push_byte(ByteCode::Or),
-            Token::And => self.func.chunk.push_byte(ByteCode::And),
-            Token::EqualEqual => self.func.chunk.push_byte(ByteCode::Equal),
-            Token::BangEqual => self.func.chunk.push_bytes(ByteCode::Equal, ByteCode::Not),
-            Token::Greater => self.func.chunk.push_byte(ByteCode::Greater),
-            Token::Less => self.func.chunk.push_byte(ByteCode::Less),
-            Token::GreaterEqual => self.func.chunk.push_bytes(ByteCode::Less, ByteCode::Not),
-            Token::LessEqual => self.func.chunk.push_bytes(ByteCode::Greater, ByteCode::Not),
+            Token::Minus => self.func.chunk.push(ByteCode::Sub),
+            Token::Slash => self.func.chunk.push(ByteCode::Div),
+            Token::Plus => self.func.chunk.push(ByteCode::Add),
+            Token::Star => self.func.chunk.push(ByteCode::Mul),
+            Token::Or => self.func.chunk.push(ByteCode::Or),
+            Token::And => self.func.chunk.push(ByteCode::And),
+            Token::EqualEqual => self.func.chunk.push(ByteCode::Equal),
+            Token::BangEqual => self.func.chunk.pushs(ByteCode::Equal, ByteCode::Not),
+            Token::Greater => self.func.chunk.push(ByteCode::Greater),
+            Token::Less => self.func.chunk.push(ByteCode::Less),
+            Token::GreaterEqual => self.func.chunk.pushs(ByteCode::Less, ByteCode::Not),
+            Token::LessEqual => self.func.chunk.pushs(ByteCode::Greater, ByteCode::Not),
             _ => return Err(self.error("invalid binary operator"))
         };
         Ok(())
@@ -543,7 +546,7 @@ impl Compiler {
         while self.locals.len() > 0 {
             if self.locals.last().unwrap().scope_depth >= self.scope_depth {
                 self.locals.pop();
-                self.func.chunk.push_byte(ByteCode::Pop);
+                self.func.chunk.push(ByteCode::Pop);
             } else {
                 break;
             }
@@ -553,7 +556,7 @@ impl Compiler {
 
     // requires identifier to be parsed
     fn push_local(&mut self) -> Result<(), CompilerError> {
-        if self.locals.len() > Max_LocalBindings {
+        if self.locals.len() > MAX_LOCAL_BINDINGS {
             return Err(self.error("exceeded maximum number of local variable definitions."));
         }
         for local in self.locals.iter().rev() {
@@ -582,11 +585,11 @@ impl Compiler {
     }
 
     fn patch_jump(&mut self, idx: usize) {
-        self.func.chunk.set_byte(idx, ByteCode::Jump(self.func.chunk.get_count()));
+        self.func.chunk.set(idx, ByteCode::Jump(self.func.chunk.count()));
     }
 
     fn patch_fjump(&mut self, idx: usize) {
-        self.func.chunk.set_byte(idx, ByteCode::JumpIfFalse(self.func.chunk.get_count()));
+        self.func.chunk.set(idx, ByteCode::JumpIfFalse(self.func.chunk.count()));
     }
 
     fn load_const(&mut self, v: Constant) -> Result<u8, CompilerError> {
@@ -616,10 +619,9 @@ impl Compiler {
     }
 
     fn expect(&mut self, what: Token, msg: &'static str) -> Result<(), CompilerError> {
-        if self.peek()?.tokn == what {
-            self.next()
-        } else {
-            Err(self.error(msg))
+        match self.peek()? {
+            t if t.tokn == what => self.next(),
+            t => Err(CompilerError::new(t.line, t.coln, msg, t.lexm))
         }
     }
 
