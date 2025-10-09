@@ -1,5 +1,31 @@
 use std::collections::HashMap;
-use crate::compiler::Func;
+
+#[derive(Debug, Clone)]
+pub struct Func {
+    pub arity: usize,
+    pub name: String,
+    pub chunk: Chunk,
+    pub retype: VarType,
+}
+
+impl PartialEq for Func {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name &&
+        self.arity == other.arity &&
+        self.retype == other.retype
+    }
+}
+
+impl Func {
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            arity: 0,
+            chunk: Chunk::new(),
+            retype: VarType::None,
+        }
+    }
+}
 
 #[allow(dead_code)]
 #[derive(Clone, PartialEq, Debug)]
@@ -129,8 +155,8 @@ impl Chunk {
         self.push(b2)
     }
 
-    pub fn set(&mut self, offset: usize, b: ByteCode) {
-        self.code[offset] = b;
+    pub fn set(&mut self, idx: usize, b: ByteCode) {
+        self.code[idx] = b;
     }
 
     pub fn load_const(&mut self, c: Constant) -> Result<u8, &'static str> {

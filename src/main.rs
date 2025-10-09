@@ -35,18 +35,18 @@ fn main() {
 
     let compiler = Compiler::new(src);
 
-    let chunk = compiler.compile().unwrap_or_else(|errs| {
+    let prog = compiler.compile().unwrap_or_else(|errs| {
         eprintln!("Codegen failed:");
         for err in errs {
             eprintln!("{}", err);
         }
         process::exit(69)
     });
-    chunk.disassemble();
+    prog.disassemble();
 
-    let mut vm = VM::new(chunk);
-    vm.exec().unwrap_or_else(|err| {
-        eprintln!("VM failed: {}", err);
-        process::exit(69)
-    });
+    // let mut vm = VM::new(chunk);
+    // vm.exec().unwrap_or_else(|err| {
+    //     eprintln!("VM failed: {}", err);
+    //     process::exit(69)
+    // });
 }
