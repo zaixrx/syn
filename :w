@@ -1,6 +1,5 @@
-use std::rc::Rc;
-use std::ptr::NonNull;
 use std::collections::HashMap;
+use crate::compiler::LocalsCount;
 
 type IdxPtr = usize;
 
@@ -8,7 +7,7 @@ type IdxPtr = usize;
 pub struct Func {
     pub arity: usize,
     pub name: String,
-    pub chunk: Rc<Chunk>,
+    pub chunk: Chunk,
     pub retype: VarType,
 }
 
@@ -25,7 +24,7 @@ impl Func {
         Self {
             name,
             arity: 0,
-            chunk: Rc::new(Chunk::new()),
+            chunk: Chunk::new(),
             retype: VarType::None,
         }
     }
@@ -199,32 +198,37 @@ impl Chunk {
 }
 
 pub struct VM {
-    prog: Chunk,
-    stack: Vec<Constant>,
-    call_stack: Vec<CallFrame>,
+    prog: Program,
+    stack: [Constant; LocalsCount::MAX as usize],
+    stack_len: usize,
+    call_stack: [CallFrame; LocalsCount::MAX as usize],
+    call_stack_len: usize,
     globals: HashMap<String, Var>,
 }
 
 // TODO: work with a reference
 pub struct CallFrame {
     ret: IdxPtr,
-    func: *mut Func,
-    stack: *const Constant,
+    func: *const Func, 
+    stack: *const Constant
 }
 
 impl VM {
-    pub fn new(prog: Chunk) -> Self {
-        Self {
+    pub fn new(prog: Program) -> VM {
+        VM {
             prog,
-            stack: Vec::new(),
-            call_stack: Vec::new(),
             globals: HashMap::new(),
         }
     }
 
     #[inline]
     fn pop(&mut self) -> Constant {
-        self.stack.pop().unwrap()
+        if self.stack_len > 0 {
+            self.stack_len -= 1;
+            self.stack[self.stack_len].clone()
+        } else {
+            panic!()
+        }
     }
 
     #[inline]
@@ -233,13 +237,17 @@ impl VM {
     }
 
     fn push(&mut self, c: Constant) {
-        self.stack.push(c)
+        if self.stack_len < self.stack.len() {
+            self.stack[self.stack_len] = c;
+            self.stack_len += 1;
+        } else {
+            panic!()
+        }
     }
 
-    #[allow(unsafe_op_in_unsafe_fn)]
-    pub unsafe fn exec(mut self) -> Result<(), &'static str> {
+    pub fn exec(mut self) -> Result<(), &'static str> {
         let mut ip: IdxPtr = 0;
-        let mut chunk: Rc<Chunk> = Rc::new(Chunk::new());
+        let mut chunk = &mut Chunk::new();
         while ip < chunk.count() {
             // self.chunk.disassemble_one(ip);
             let byte = chunk.code[ip]; 
@@ -364,15 +372,14 @@ impl VM {
                 },
                 ByteCode::Call(args_c) => {
                     let name = self.pop().expect_string();
-                    if let Some(var) = self.globals.get_mut(&name) {
-                         if let Constant::Function(ref mut func) = var.val {
+                    if let Some(var) = self.globals.get(&name) {
+                         if let Constant::Function(ref func) = var.val {
                              if func.arity != args_c as usize {
                                  return Err("wrong argument count");
                              }
-                             chunk = Rc::clone(&func.chunk);
-                             let func_ptr = func as *mut Func;
-                             self.push_func(func_ptr, ip + 1, self.get_stack_ptr());
+                             self.push_func(func, ip + 1, self.get_stack_ptr());
                              ip = 0;
+                             // chunk = &mut func.chunk;
                              continue;
                          } else {
                              return Err("can only call a function");
@@ -383,8 +390,8 @@ impl VM {
                 },
                 ByteCode::Ret => {
                     let frame = self.pop_func();
-                    chunk = Rc::clone(&(*frame.func).chunk);
                     ip = frame.ret;
+                    // chunk = &mut (*frame.func).chunk;
                 }
             }
             ip += 1;
@@ -400,8 +407,9 @@ impl VM {
         todo!("get_stack_ptr")
     }
 
-    fn push_func(&mut self, func: *mut Func, ret: IdxPtr, stack: *const Constant) {
-        todo!("push_func")
+    fn push_func(&mut self, func: *const Func, ret: IdxPtr, stack: *const Constant) {
+        let call_frame = CallFrame { func, ret, stack };
+        // self.call_stack.push(call_frame);
     }
 
     fn pop_func(&mut self) -> CallFrame {

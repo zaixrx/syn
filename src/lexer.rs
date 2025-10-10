@@ -23,6 +23,7 @@ pub enum Token {
     RightBrace,
     Colon,
     SemiColon,
+    Comma,
 
     Minus,
     Slash,
@@ -238,6 +239,7 @@ impl Lexer {
                 }
             },
             ':' => Token::Colon,
+            ',' => Token::Comma,
             c if c.is_ascii_digit() => {
                 self.curr -= 1;
                 self.consume_integer();

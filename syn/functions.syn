@@ -9,7 +9,7 @@ func fib(upper: Int) -> Int {
 }
 
 func main() {
-	let a = 1;
-	print a;
+	let result = fib(100);
+	print(result);
 }
 

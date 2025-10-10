@@ -25,7 +25,6 @@ pub struct Compiler {
     prog: Chunk
 }
 
-const MAX_LOCAL_BINDINGS: usize = u8::MAX as usize;
 struct Local {
     token: TokenHeader,
     scope_depth: usize,
@@ -59,6 +58,9 @@ struct Rule {
     prec: Precedence,
 }
 
+pub type ArgsCount = u8;
+pub type LocalsCount = u8;
+
 // public methods
 impl Compiler {
     pub fn new(src: String) -> Self {
@@ -67,7 +69,7 @@ impl Compiler {
             curr: TokenHeader { tokn: Token::EOF, coln: 0, line: 0, lexm: String::new() },
             scope_depth: 0,
             loop_state: LoopState::new(),
-            locals: Vec::with_capacity(MAX_LOCAL_BINDINGS),
+            locals: Vec::with_capacity(LocalsCount::MAX as usize),
             func: None,
             prog: Chunk::new(),
             had_error: false,
@@ -81,10 +83,10 @@ impl Compiler {
             match self.declaration() {
                 Ok(_) => (),
                 Err(err) => {
-                    errs.push(err);
-                    self.had_error = true;
-                    if !self.synchronize() {
-                        return Err(errs);
+                    if !self.panic_mode {
+                        errs.push(err);
+                        self.had_error = true;
+                        self.panic_mode = true;
                     }
                 }
             };
@@ -147,6 +149,9 @@ impl Compiler {
                 return self.statement();
             }
         };
+        if self.panic_mode {
+            self.synchronize();
+        }
         Ok(())
     }
 
@@ -222,8 +227,8 @@ impl Compiler {
         match tok {
             Token::LeftParen => Rule {
                 prefix: Some(Compiler::group),
-                infix: None,
-                prec: Precedence::Primary,
+                infix: Some(Compiler::call),
+                prec: Precedence::Call,
             },
             Token::Identifer => Rule {
                 prefix: Some(Compiler::identifer),
@@ -345,6 +350,7 @@ impl Compiler {
             func.retype = retype;
         }
         self.compile_forced_block()?;
+        self.push_bytecode(ByteCode::Ret);
         let func = self.func.take().unwrap();
         match self.prog.load_const(Constant::Function(func)) {
             Ok(idx) => idx,
@@ -361,8 +367,11 @@ impl Compiler {
             if curr == Token::RightParen || curr == Token::EOF {
                 break;
             }
+            if count > 0 {
+                self.expect(Token::Comma, "expected ',' param seperator")?;
+            }
             // TODO: push as local variable
-            self.expect(Token::Identifer, "expected parameter name")?;
+            self.expect(Token::Identifer, "expected param name")?;
             self.expect(Token::Colon, "expected ':' param type seperator")?;
             self.compile_type()?;
             count += 1;
@@ -506,6 +515,33 @@ impl Compiler {
         Ok(())
     }
 
+    fn call(&mut self, _: bool) -> Result<(), CompilerError> {
+        let args_count = self.args()?;
+        self.push_bytecode(ByteCode::Call(args_count));
+        Ok(())
+    }
+
+    fn args(&mut self) -> Result<ArgsCount, CompilerError> {
+        let mut count = 0;
+        loop {
+            let curr = self.peek()?.tokn;
+            if curr == Token::RightParen || curr == Token::EOF {
+                break;
+            }
+            if count > 0 {
+                self.expect(Token::Comma, "expected ',' arg seperator")?;
+            }
+            self.expression()?;
+            count += if count > ArgsCount::MAX {
+                return Err(self.error("exceeded max args limit"))
+            } else {
+                1
+            };
+        }
+        self.expect(Token::RightParen, "expected enclosing ')'")?;
+        Ok(count)
+    }
+
     fn unary(&mut self, _: bool) -> Result<(), CompilerError> {
         let op_tok = self.curr.tokn;
         self.parse_precedence(Precedence::Unary)?;
@@ -599,7 +635,7 @@ impl Compiler {
 
     // requires identifier to be parsed
     fn push_local(&mut self) -> Result<(), CompilerError> {
-        if self.locals.len() > MAX_LOCAL_BINDINGS {
+        if self.locals.len() > LocalsCount::MAX as usize {
             return Err(self.error("exceeded maximum number of local variable definitions."));
         }
         for local in self.locals.iter().rev() {
@@ -617,8 +653,8 @@ impl Compiler {
         Ok(())
     }
 
-    // REFATOR
-    fn resolve_local(&self, name: &str) -> i16 { // i16 to cover all [0-255]
+    // REFACTOR
+    fn resolve_local(&self, name: &str) -> i16 { // i16 to cover all [-1; 255]
         for (i, local) in self.locals.iter().enumerate().rev() {
             if local.token.lexm == name {
                 return i as i16;
