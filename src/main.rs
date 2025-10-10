@@ -44,9 +44,10 @@ fn main() {
     });
     prog.disassemble();
 
-    // let mut vm = VM::new(chunk);
-    // vm.exec().unwrap_or_else(|err| {
-    //     eprintln!("VM failed: {}", err);
-    //     process::exit(69)
-    // });
+    unsafe {
+        VM::new().exec(prog).unwrap_or_else(|err| {
+            eprintln!("VM failed: {}", err);
+            process::exit(69)
+        });
+    }
 }

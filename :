@@ -70,7 +70,7 @@ impl Compiler {
             scope_depth: 0,
             loop_state: LoopState::new(),
             locals: Vec::with_capacity(LocalsCount::MAX as usize),
-            curr_chunk: None,
+            func: None,
             prog: Chunk::new(),
             had_error: false,
             panic_mode: false,
@@ -332,22 +332,27 @@ impl Compiler {
     }
 
     fn compile_func(&mut self) -> Result<(), CompilerError> {
-        if self.curr_chunk.is_some() {
-            return Err(self.error("can't have nested functions"))
+        if self.func.is_some() {
+            return Err(self.error("can't have function inside function"))
         }
-        self.curr_chunk = Some(Chunk::new());
         self.expect(Token::Identifer, "expected the function's name")?;
-        let name = self.curr.lexm.clone();
+        self.func = Some(Func::new(self.curr.lexm.clone()));
         let arity = self.compile_params()?;
         let retype = if self.check(Token::RightArrow)? {
             self.compile_type()?
         } else {
             VarType::None
         };
+        // TODO: fucking replace that
+        {
+            let func = self.get_func()?;
+            func.arity  = arity;
+            func.retype = retype;
+        }
         self.compile_forced_block()?;
         self.push_bytecode(ByteCode::Ret);
-        let chunk = self.curr_chunk.take().unwrap();
-        match self.prog.load_const(Constant::Function(Func::new(name, arity, retype, chunk))) {
+        let func = self.func.take().unwrap();
+        match self.prog.load_const(Constant::Function(func)) {
             Ok(idx) => idx,
             Err(msg) => return Err(self.error(msg))
         };
@@ -597,7 +602,7 @@ impl Compiler {
 
     #[inline]
     fn bytecode_count(&self) -> Result<usize, CompilerError> {
-        Ok(self.curr_chunk.as_ref().unwrap().count())
+        Ok(self.chunk.as_ref().unwrap().chunk.count())
     }
 
     #[inline]

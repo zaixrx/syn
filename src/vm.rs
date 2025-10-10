@@ -1,6 +1,18 @@
 use std::rc::Rc;
-use std::ptr::NonNull;
 use std::collections::HashMap;
+
+pub struct VM {
+    stack: Vec<Constant>,
+    call_stack: Vec<CallFrame>,
+    globals: HashMap<String, Var>,
+}
+
+// TODO: work with a reference
+pub struct CallFrame {
+    ret: IdxPtr,
+    func: *mut Func,
+    stack: *const Constant,
+}
 
 type IdxPtr = usize;
 
@@ -21,12 +33,12 @@ impl PartialEq for Func {
 }
 
 impl Func {
-    pub fn new(name: String) -> Self {
+    pub fn new(name: String, arity: usize, retype: VarType, chunk: Chunk) -> Self {
         Self {
             name,
-            arity: 0,
-            chunk: Rc::new(Chunk::new()),
-            retype: VarType::None,
+            arity,
+            retype,
+            chunk: Rc::new(chunk),
         }
     }
 }
@@ -198,24 +210,9 @@ impl Chunk {
     }
 }
 
-pub struct VM {
-    prog: Chunk,
-    stack: Vec<Constant>,
-    call_stack: Vec<CallFrame>,
-    globals: HashMap<String, Var>,
-}
-
-// TODO: work with a reference
-pub struct CallFrame {
-    ret: IdxPtr,
-    func: *mut Func,
-    stack: *const Constant,
-}
-
 impl VM {
-    pub fn new(prog: Chunk) -> Self {
+    pub fn new() -> Self {
         Self {
-            prog,
             stack: Vec::new(),
             call_stack: Vec::new(),
             globals: HashMap::new(),
@@ -237,9 +234,9 @@ impl VM {
     }
 
     #[allow(unsafe_op_in_unsafe_fn)]
-    pub unsafe fn exec(mut self) -> Result<(), &'static str> {
+    pub unsafe fn exec(mut self, prog: Chunk) -> Result<(), &'static str> {
         let mut ip: IdxPtr = 0;
-        let mut chunk: Rc<Chunk> = Rc::new(Chunk::new());
+        let mut chunk = Rc::new(prog);
         while ip < chunk.count() {
             // self.chunk.disassemble_one(ip);
             let byte = chunk.code[ip]; 
@@ -392,21 +389,24 @@ impl VM {
         return Ok(());
     }
 
-    fn load_prog_entry(&mut self) -> Result<&mut Chunk, &'static str> {
-        todo!("load_prog_entry")
-    }
-
     fn get_stack_ptr(&self) -> *const Constant {
-        todo!("get_stack_ptr")
+        let mut offset = self.stack.len();
+        if offset > 0 {
+            offset -= 1;
+        }
+        unsafe {
+            self.stack.as_ptr().add(offset)
+        }
     }
 
+    #[allow(unused_variables)]
     fn push_func(&mut self, func: *mut Func, ret: IdxPtr, stack: *const Constant) {
-        todo!("push_func")
+        let call_frame = CallFrame { func, stack, ret };
+        self.call_stack.push(call_frame);
     }
 
     fn pop_func(&mut self) -> CallFrame {
-        todo!("pop_func")
-        // self.call_stack.pop().unwrap()
+        self.call_stack.pop().unwrap()
     }
 }
 
