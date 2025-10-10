@@ -95,6 +95,10 @@ impl Compiler {
         if self.had_error {
             Err(errs)
         } else {
+            if let Err(msg) = self.prog.load_const(Constant::String(String::from("main"))) {
+                return Err(vec![self.error(msg)]);
+            }
+            self.prog.push(ByteCode::Call(0));
             Ok(self.prog)
         }
     }
@@ -227,7 +231,7 @@ impl Compiler {
         match tok {
             Token::LeftParen => Rule {
                 prefix: Some(Compiler::group),
-                infix: Some(Compiler::call),
+                infix: None,
                 prec: Precedence::Call,
             },
             Token::Identifer => Rule {
@@ -345,12 +349,17 @@ impl Compiler {
             VarType::None
         };
         self.compile_forced_block()?;
-        self.push_bytecode(ByteCode::Ret);
+        self.push_bytecode(ByteCode::Ret)?;
         let chunk = self.curr_chunk.take().unwrap();
+        match self.prog.load_const(Constant::String(name.clone())) {
+            Ok(idx) => idx,
+            Err(msg) => return Err(self.error(msg))
+        };
         match self.prog.load_const(Constant::Function(Func::new(name, arity, retype, chunk))) {
             Ok(idx) => idx,
             Err(msg) => return Err(self.error(msg))
         };
+        self.prog.push(ByteCode::GDef);
         Ok(())
     }
 
@@ -367,6 +376,8 @@ impl Compiler {
             }
             // TODO: push as local variable
             self.expect(Token::Identifer, "expected param name")?;
+            self.push_local()?; // the next step in defining a local variable is at runtime
+                                // (loading it's value in the VM's stack)
             self.expect(Token::Colon, "expected ':' param type seperator")?;
             self.compile_type()?;
             count += 1;
@@ -490,6 +501,8 @@ impl Compiler {
             if can_assign && self.check(Token::Equal)? {
                 self.expression()?;
                 self.push_bytecode(ByteCode::GSet)?;
+            } else if self.check(Token::LeftParen)? {
+                self.call(can_assign)?;
             } else {
                 self.push_bytecode(ByteCode::GGet)?;
             }
@@ -512,7 +525,7 @@ impl Compiler {
 
     fn call(&mut self, _: bool) -> Result<(), CompilerError> {
         let args_count = self.args()?;
-        self.push_bytecode(ByteCode::Call(args_count));
+        self.push_bytecode(ByteCode::Call(args_count))?;
         Ok(())
     }
 

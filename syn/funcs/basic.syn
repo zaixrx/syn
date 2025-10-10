@@ -1,0 +1,8 @@
+
+func printMessage(message: Str) {
+	print(message);
+}
+
+func main() {
+	printMessage("hello world");
+}

@@ -1,0 +1,18 @@
+func fib(n: Int) -> Int {
+	if n <= 1 {
+		return 1;
+	}
+ 	let a = 1;
+ 	let b = 1;
+ 	while n > 0 {
+ 		a = a + b;
+ 		b = a - b;
+		n = n - 1;
+ 	}
+ 	return a;
+}
+
+func main() {
+	let fib = fib(100);
+	print(fib);
+}

@@ -11,7 +11,7 @@ pub struct VM {
 pub struct CallFrame {
     ret: IdxPtr,
     func: *mut Func,
-    stack: *const Constant,
+    stack_offset: usize,
 }
 
 type IdxPtr = usize;
@@ -146,12 +146,10 @@ pub enum ByteCode {
     Ret
 }
 
-type Program = Chunk;
-
 #[derive(Clone, Debug)]
 pub struct Chunk {
-    consts: Vec<Constant>,
     code: Vec<ByteCode>,
+    consts: Vec<Constant>,
 }
 
 impl Chunk {
@@ -238,7 +236,7 @@ impl VM {
         let mut ip: IdxPtr = 0;
         let mut chunk = Rc::new(prog);
         while ip < chunk.count() {
-            // self.chunk.disassemble_one(ip);
+            chunk.disassemble_one(ip);
             let byte = chunk.code[ip]; 
             match byte {
                 ByteCode::Push(i) => {
@@ -360,6 +358,7 @@ impl VM {
                     }
                 },
                 ByteCode::Call(args_c) => {
+                    let args = (0..args_c).map(|_| self.pop()).collect::<Vec<Constant>>();
                     let name = self.pop().expect_string();
                     if let Some(var) = self.globals.get_mut(&name) {
                          if let Constant::Function(ref mut func) = var.val {
@@ -368,8 +367,11 @@ impl VM {
                              }
                              chunk = Rc::clone(&func.chunk);
                              let func_ptr = func as *mut Func;
-                             self.push_func(func_ptr, ip + 1, self.get_stack_ptr());
+                             self.push_func(ip + 1, func_ptr, self.stack.len());
                              ip = 0;
+                             for arg in args {
+                                 self.push(arg);
+                             }
                              continue;
                          } else {
                              return Err("can only call a function");
@@ -389,19 +391,9 @@ impl VM {
         return Ok(());
     }
 
-    fn get_stack_ptr(&self) -> *const Constant {
-        let mut offset = self.stack.len();
-        if offset > 0 {
-            offset -= 1;
-        }
-        unsafe {
-            self.stack.as_ptr().add(offset)
-        }
-    }
-
     #[allow(unused_variables)]
-    fn push_func(&mut self, func: *mut Func, ret: IdxPtr, stack: *const Constant) {
-        let call_frame = CallFrame { func, stack, ret };
+    fn push_func(&mut self, ret: IdxPtr, func: *mut Func, stack_offset: usize) {
+        let call_frame = CallFrame { ret, func, stack_offset };
         self.call_stack.push(call_frame);
     }
 
