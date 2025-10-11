@@ -1,9 +1,11 @@
 use std::rc::Rc;
 
 type VMError = String;
+pub type ConstsCount = u8;
 pub type ArgsCount = u8;
 pub type LocalsCount = u8;
 pub type GlobalsCount = u8;
+pub type ChunkCount = usize;
 
 pub struct VM {
     stack: Vec<Constant>,
@@ -14,7 +16,7 @@ pub struct VM {
 #[derive(Clone)]
 pub struct CallFrame {
     ip: IdxPtr,
-    func: *mut Func,
+    func: Func,
     stack_offset: usize,
 }
 
@@ -78,6 +80,13 @@ impl Constant {
         }
     }
 
+    fn expect_function(self, msg: &'static str) -> Result<Func, &'static str> {
+        match self {
+            Constant::Function(func) => Ok(func),
+            _ => Err(msg),
+        }
+    }
+
     fn get_var_type(&self) -> Type {
         match self {
             Constant::Integer(_) => Type::Integer,
@@ -109,7 +118,7 @@ pub enum Type {
 #[repr(u8)]
 #[derive(Debug, Copy, Clone)]
 pub enum ByteCode {
-    Push(u8),
+    Push(ConstsCount),
     Pop,
 
     Add,
@@ -130,13 +139,13 @@ pub enum ByteCode {
     GDef,
     GGet(GlobalsCount),
     GSet(GlobalsCount),
-    Call(GlobalsCount, ArgsCount),
     LDef,
     LGet(LocalsCount),
     LSet(LocalsCount),
 
-    Jump(usize),
-    JumpIfFalse(usize),
+    Jump(ChunkCount),
+    JumpIfFalse(ChunkCount),
+    Call(ArgsCount),
 
     Ret,
 }
@@ -174,13 +183,13 @@ impl Chunk {
     }
 
     pub fn load_const(&mut self, c: Constant) -> Result<u8, &'static str> {
-        let index = self.consts.len();
-        if index > 0xFF {
-            Err("can't define more than 255 constants in one chunks")
+        let index = self.consts.len() as ConstsCount;
+        if index > ConstsCount::MAX {
+            Err("can't define more constants in chunk")
         } else {
-            self.push(ByteCode::Push(index as u8));
+            self.push(ByteCode::Push(index));
             self.consts.push(c);
-            Ok(index as u8)
+            Ok(index)
         }
     }
 
@@ -237,14 +246,13 @@ impl VM {
 
     #[allow(unsafe_op_in_unsafe_fn)]
     pub unsafe fn exec(mut self, prog: Chunk) -> Result<(), VMError> {
-        let mut prog_func = Func::new(String::from("__prog__"), 0, Type::None, prog);
         let mut frame = CallFrame {
             ip: 0,
-            func: &mut prog_func,
             stack_offset: 0,
+            func: Func::new(String::from("__prog__"), 0, Type::None, prog),
         };
-        while frame.ip < (*frame.func).chunk.count() {
-            let chunk = &(*frame.func).chunk;
+        while frame.ip < frame.func.chunk.count() {
+            let chunk = &frame.func.chunk;
             // chunk.disassemble_one(frame.ip);
             let byte = chunk.code[frame.ip];
             match byte {
@@ -394,27 +402,23 @@ impl VM {
                         frame.ip = dest - 1;
                     }
                 }
-                ByteCode::Call(idx, args_c) => {
+                ByteCode::Call(args_c) => {
                     // TODO: move additional check to typechecker at compile-time
                     let args = (0..args_c).map(|_| self.pop()).collect::<Vec<Constant>>();
-                    if let Constant::Function(ref mut func) = self.globals[idx as usize] {
-                        if func.arity != args_c as usize {
-                            return Err(format!("expected {} args got {}", func.arity, args_c));
-                        }
-                        let func_ptr = func as *mut Func;
-                        self.push_func(frame.clone());
-                        frame = CallFrame {
-                            ip: 0,
-                            func: func_ptr,
-                            stack_offset: self.stack.len(),
-                        };
-                        for arg in args {
-                            self.push(arg);
-                        }
-                        continue;
-                    } else {
-                        return Err(format!("invalid call target"));
+                    let func = self.pop().expect_function("invalid call target")?;
+                    if func.arity != args_c as usize {
+                        return Err(format!("expected {} args got {}", func.arity, args_c));
                     }
+                    self.push_func(frame.clone());
+                    frame = CallFrame {
+                        func,
+                        ip: 0,
+                        stack_offset: self.stack.len(),
+                    };
+                    for arg in args {
+                        self.push(arg);
+                    }
+                    continue;
                 }
                 ByteCode::Ret => {
                     let val = self.pop();

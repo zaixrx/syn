@@ -1,6 +1,8 @@
 use crate::lexer::{Lexer, Token, TokenHeader};
 
-use crate::vm::{ArgsCount, ByteCode, Chunk, Constant, Func, GlobalsCount, LocalsCount, Type};
+use crate::vm::{
+    ArgsCount, ByteCode, Chunk, ChunkCount, Constant, Func, GlobalsCount, LocalsCount, Type,
+};
 
 pub struct Compiler {
     lexer: Lexer,
@@ -101,7 +103,7 @@ impl Compiler {
             Err(errs)
         } else {
             if let Some(idx) = self.resolve_global("main") {
-                self.prog.push(ByteCode::Call(idx, 0));
+                self.prog.pushs(ByteCode::GGet(idx), ByteCode::Call(0));
             } else {
                 return Err(vec![
                     self.error("consider adding `func main()` to your program"),
@@ -245,7 +247,7 @@ impl Compiler {
         match tok {
             Token::LeftParen => Rule {
                 prefix: Some(Compiler::group),
-                infix: None,
+                infix: Some(Compiler::call),
                 prec: Precedence::Call,
             },
             Token::Identifer => Rule {
@@ -415,6 +417,7 @@ impl Compiler {
             Token::FloatT => Type::Float,
             Token::BoolT => Type::Bool,
             Token::StrT => Type::String,
+            Token::FuncT => Type::Function,
             _ => return Err(self.error("expected valid type")),
         };
         self.next()?;
@@ -428,11 +431,8 @@ impl Compiler {
         self.compile_forced_block()?;
         self.push_bytecode(ByteCode::Jump(self.loop_state.start))?;
         self.patch_fjump(loop_cond)?;
-        for i in 0..self.loop_state.break_jumps.len() {
-            self.set_bytecode(
-                self.loop_state.break_jumps[i],
-                ByteCode::Jump(self.bytecode_count()?),
-            )?;
+        while let Some(jump) = self.loop_state.break_jumps.pop() {
+            self.patch_fjump(jump)?;
         }
         self.loop_state.end_loop();
         Ok(())
@@ -533,7 +533,6 @@ impl Compiler {
         Ok(())
     }
 
-    // REFACTOR
     fn identifer(&mut self, can_assign: bool) -> Result<(), CompilerError> {
         match self.resolve_local(self.curr.lexm.as_str()) {
             Some(idx) => {
@@ -549,9 +548,6 @@ impl Compiler {
                     if can_assign && self.check(Token::Equal)? {
                         self.expression()?;
                         self.push_bytecode(ByteCode::GSet(idx))?;
-                    } else if self.check(Token::LeftParen)? {
-                        let args_count = self.args()?;
-                        self.push_bytecode(ByteCode::Call(idx, args_count))?;
                     } else {
                         self.push_bytecode(ByteCode::GGet(idx))?;
                     }
@@ -566,6 +562,12 @@ impl Compiler {
     fn group(&mut self, _: bool) -> Result<(), CompilerError> {
         self.expression()?;
         self.expect(Token::RightParen, "expected closing ')'")?;
+        Ok(())
+    }
+
+    fn call(&mut self, _: bool) -> Result<(), CompilerError> {
+        let args_count = self.args()?;
+        self.push_bytecode(ByteCode::Call(args_count))?;
         Ok(())
     }
 
@@ -738,12 +740,12 @@ impl Compiler {
         None
     }
 
-    fn patch_jump(&mut self, idx: usize) -> Result<(), CompilerError> {
+    fn patch_jump(&mut self, idx: ChunkCount) -> Result<(), CompilerError> {
         self.set_bytecode(idx, ByteCode::Jump(self.bytecode_count()?))?;
         Ok(())
     }
 
-    fn patch_fjump(&mut self, idx: usize) -> Result<(), CompilerError> {
+    fn patch_fjump(&mut self, idx: ChunkCount) -> Result<(), CompilerError> {
         self.set_bytecode(idx, ByteCode::JumpIfFalse(self.bytecode_count()?))?;
         Ok(())
     }

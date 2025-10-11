@@ -62,6 +62,7 @@ pub enum Token {
     FloatT,
     StrT,
     BoolT,
+    FuncT,
     RightArrow,
 
     EOF,
@@ -280,6 +281,7 @@ impl Lexer {
                     "Float" => Token::FloatT,
                     "Str" => Token::StrT,
                     "Bool" => Token::BoolT,
+                    "Func" => Token::FuncT,
                     _ => Token::Identifer,
                 }
             }

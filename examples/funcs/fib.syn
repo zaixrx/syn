@@ -12,7 +12,11 @@ func fib(n: Float) -> Float {
  	return a;
 }
 
+func get_fib() -> Func {
+    return fib;
+}
+
 func main() {
-	let result = fib(123);
-	print(result);
+    let target = 123;
+	print("get_fib(", target, ") =", get_fib()(target));
 }
