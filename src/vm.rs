@@ -8,8 +8,9 @@ pub struct VM {
 }
 
 // TODO: work with a reference
+#[derive(Clone)]
 pub struct CallFrame {
-    ret: IdxPtr,
+    ip: IdxPtr,
     func: *mut Func,
     stack_offset: usize,
 }
@@ -143,7 +144,7 @@ pub enum ByteCode {
     JumpIfFalse(usize),
     Call(u8),
 
-    Ret
+    Ret,
 }
 
 #[derive(Clone, Debug)]
@@ -231,17 +232,29 @@ impl VM {
         self.stack.push(c)
     }
 
+    fn must_op<T>(&self, r: Option<T>, msg: &'static str) -> Result<T, VMError> {
+        match r {
+            Some(v) => Ok(v),
+            None => Err(VMError::from(msg))
+        }
+    }
+
     #[allow(unsafe_op_in_unsafe_fn)]
-    pub unsafe fn exec(mut self, prog: Chunk) -> Result<(), &'static str> {
-        let mut ip: IdxPtr = 0;
-        let mut chunk = Rc::new(prog);
-        while ip < chunk.count() {
-            chunk.disassemble_one(ip);
-            let byte = chunk.code[ip]; 
+    pub unsafe fn exec(mut self, prog: Chunk) -> Result<(), VMError> {
+        let mut prog_func = Func::new(String::from("__prog__"), 0, VarType::None, prog);
+        let mut frame = CallFrame {
+            ip: 0,
+            func: &mut prog_func,
+            stack_offset: 0,
+        };
+        while frame.ip < (*frame.func).chunk.count() {
+            let chunk = &(*frame.func).chunk;
+            // chunk.disassemble_one(frame.ip);
+            let byte = chunk.code[frame.ip]; 
             match byte {
                 ByteCode::Push(i) => {
                     if i as usize >= chunk.consts.len() {
-                        return Err("constant doesn't exist");
+                        return Err(format!("constant doesn't exist"));
                     }
                     self.push(chunk.consts[i as usize].clone());
                 },
@@ -252,26 +265,54 @@ impl VM {
                     let x = self.pop();
                     if let Constant::Integer(x) = x && let Constant::Integer(y) = y {
                         self.push(match byte {
-                            ByteCode::Add => Constant::Integer(x + y),
-                            ByteCode::Sub => Constant::Integer(x - y),
-                            ByteCode::Mul => Constant::Integer(x * y),
-                            ByteCode::Div => Constant::Integer(x / y),
+                            ByteCode::Add => Constant::Integer(
+                                self.must_op(x.checked_add(y), "addition overflow")?
+                            ),
+                            ByteCode::Sub => Constant::Integer(
+                                self.must_op(x.checked_sub(y), "subtraction overflow")?
+                            ),
+                            ByteCode::Mul => Constant::Integer(
+                                self.must_op(x.checked_mul(y), "multiplication overflow")?
+                            ),
+                            ByteCode::Div => Constant::Integer(
+                                self.must_op(x.checked_div(y), "division overflow")?
+                            ),
                             ByteCode::Less => Constant::Bool(x < y),
                             ByteCode::Greater => Constant::Bool(x > y),
                             _ => unreachable!()
                         });
                     } else if let Constant::Float(x) = x && let Constant::Float(y) = y {
                         self.push(match byte {
-                            ByteCode::Add => Constant::Float(x + y),
-                            ByteCode::Sub => Constant::Float(x - y),
-                            ByteCode::Mul => Constant::Float(x * y),
-                            ByteCode::Div => Constant::Float(x / y),
+                            ByteCode::Add => Constant::Float(
+                                {
+                                    let r = x + y;
+                                    self.must_op(r.is_finite().then_some(r), "addition overflow")?
+                                }
+                            ),
+                            ByteCode::Sub => Constant::Float(
+                                {
+                                    let r = x - y;
+                                    self.must_op(r.is_finite().then_some(r), "subtraction overflow")?
+                                }
+                            ),
+                            ByteCode::Mul => Constant::Float(
+                                {
+                                    let r = x * y;
+                                    self.must_op(r.is_finite().then_some(r), "multiplication overflow")?
+                                }
+                            ),
+                            ByteCode::Div => Constant::Float(
+                                {
+                                    let r = x / y;
+                                    self.must_op(r.is_finite().then_some(r), "division overflow")?
+                                }
+                            ),
                             ByteCode::Less => Constant::Bool(x < y),
                             ByteCode::Greater => Constant::Bool(x > y),
                             _ => unreachable!()
                         });
                     } else {
-                        return Err("operands must both be numbers")
+                        return Err(format!("operands must both be numbers"))
                     }
                 },
                 ByteCode::Print => {
@@ -315,11 +356,11 @@ impl VM {
                     match self.globals.get(&name) {
                         Some(var) => {
                             if var.typ == VarType::None {
-                                return Err("can't use unintialized variable");
+                                return Err(format!("can't use unintialized variable"));
                             }
                             self.push(var.val.clone());
                         },
-                        None => return Err("undefined variable")
+                        None => return Err(format!("undefined variable"))
                     };
                 }
                 ByteCode::GSet => {
@@ -329,32 +370,42 @@ impl VM {
                         Some(var) => {
                             // TODO: typechecking on every access is tedious
                             if val.get_var_type() != var.typ {
-                                return Err("mismatched types");
+                                return Err(
+                                    format!("mismatched types ({:?} != {:?})",
+                                        val.get_var_type(),
+                                        var.typ
+                                    )
+                                );
                             }
                             self.globals.insert(name.into(), Var {
                                 typ: val.get_var_type(),
                                 val: val.clone()
                             });
                         },
-                        None => return Err("undefined variable"),
+                        None => return Err(format!("undefined variable")),
                     };
                     self.push(val);
                 },
                 ByteCode::LDef => (), // yeah
-                ByteCode::LGet(offset) => self.push(self.stack[offset as usize].clone()),
+                ByteCode::LGet(offset) => self.push(self.stack[frame.stack_offset + offset as usize].clone()),
                 ByteCode::LSet(offset) => {
                     let val = self.peek();
-                    if val.get_var_type() != self.stack[offset as usize].get_var_type() {
-                        return Err("mismatched types");
+                    if val.get_var_type() != self.stack[frame.stack_offset + offset as usize].get_var_type() {
+                            return Err(
+                                format!("mismatched types ({:?} != {:?})",
+                                    val.get_var_type(),
+                                    self.stack[frame.stack_offset + offset as usize].get_var_type()
+                                )
+                            );
                     }
-                    self.stack[offset as usize] = val.clone();
+                    self.stack[frame.stack_offset + offset as usize] = val.clone();
                 },
                 ByteCode::Jump(dest) => {
-                    ip = dest - 1; // to make room for iterating
+                    frame.ip = dest - 1; // to make room for iterating
                 }, 
                 ByteCode::JumpIfFalse(dest) => {
                     if !self.pop().to_bool() {
-                        ip = dest - 1;
+                        frame.ip = dest - 1;
                     }
                 },
                 ByteCode::Call(args_c) => {
@@ -363,38 +414,45 @@ impl VM {
                     if let Some(var) = self.globals.get_mut(&name) {
                          if let Constant::Function(ref mut func) = var.val {
                              if func.arity != args_c as usize {
-                                 return Err("wrong argument count");
+                                 return Err(
+                                     format!("expected {} args got {}", func.arity, args_c)
+                                );
                              }
-                             chunk = Rc::clone(&func.chunk);
                              let func_ptr = func as *mut Func;
-                             self.push_func(ip + 1, func_ptr, self.stack.len());
-                             ip = 0;
+                             self.push_func(frame.clone());
+                             frame = CallFrame {
+                                 ip: 0,
+                                 func: func_ptr,
+                                 stack_offset: self.stack.len(),
+                             };
                              for arg in args {
                                  self.push(arg);
                              }
                              continue;
                          } else {
-                             return Err("can only call a function");
+                             return Err(format!("can only call a function"));
                          }
                     } else {
-                         return Err("undefined variable");
+                         return Err(format!("undefined binding '{name}'"));
                     }
                 },
                 ByteCode::Ret => {
-                    let frame = self.pop_func();
-                    chunk = Rc::clone(&(*frame.func).chunk);
-                    ip = frame.ret;
+                    let val = self.pop();
+                    while self.stack.len() > frame.stack_offset {
+                        self.pop();
+                    }
+                    frame = self.pop_func();
+                    self.push(val);
                 }
             }
-            ip += 1;
+            frame.ip += 1;
         }
         return Ok(());
     }
 
     #[allow(unused_variables)]
-    fn push_func(&mut self, ret: IdxPtr, func: *mut Func, stack_offset: usize) {
-        let call_frame = CallFrame { ret, func, stack_offset };
-        self.call_stack.push(call_frame);
+    fn push_func(&mut self, frame: CallFrame) {
+        self.call_stack.push(frame);
     }
 
     fn pop_func(&mut self) -> CallFrame {
@@ -414,3 +472,5 @@ impl std::fmt::Display for Constant {
         }
     }
 }
+
+type VMError = String;

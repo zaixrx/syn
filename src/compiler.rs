@@ -1,4 +1,3 @@
-// TODO: make global variables work
 use crate::lexer::{
     Lexer,
     Token,
@@ -16,13 +15,16 @@ use crate::vm::{
 pub struct Compiler {
     lexer: Lexer,
     curr: TokenHeader,
-    loop_state: LoopState,
+
+    prog: Chunk,
+    curr_chunk: Option<Chunk>,
     locals: Vec<Local>,
     scope_depth: usize,
-    curr_chunk: Option<Chunk>,
+    loop_state: LoopState,
+
     had_error: bool,
     panic_mode: bool,
-    prog: Chunk
+    declarative_mode: bool, // used to prevent non-declarative top level code -- for structure
 }
 
 struct Local {
@@ -74,6 +76,7 @@ impl Compiler {
             prog: Chunk::new(),
             had_error: false,
             panic_mode: false,
+            declarative_mode: false,
         }
     }
 
@@ -142,12 +145,16 @@ impl Compiler {
     fn declaration(&mut self) -> Result<(), CompilerError> {
         match self.peek()?.tokn {
             Token::Let => {
+                self.declarative_mode = true;
                 self.next()?;
                 self.compile_let()?;
+                self.declarative_mode = false;
             },
             Token::Func => {
+                self.declarative_mode = true;
                 self.next()?;
                 self.compile_func()?;
+                self.declarative_mode = false;
             },
             _ => {
                 return self.statement();
@@ -184,6 +191,10 @@ impl Compiler {
             Token::Continue => {
                 self.next()?;
                 self.compile_continue()?;
+            },
+            Token::Return => {
+                self.next()?;
+                self.compile_return()?;
             },
             Token::EOF => {
                 self.next()?;
@@ -339,6 +350,7 @@ impl Compiler {
         if self.curr_chunk.is_some() {
             return Err(self.error("can't have nested functions"))
         }
+        self.start_scope();
         self.curr_chunk = Some(Chunk::new());
         self.expect(Token::Identifer, "expected the function's name")?;
         let name = self.curr.lexm.clone();
@@ -348,8 +360,18 @@ impl Compiler {
         } else {
             VarType::None
         };
-        self.compile_forced_block()?;
+        self.expect(Token::LeftBrace, "expected disclosing '{'")?;
+        loop {
+            let token = self.peek()?.tokn;
+            if token == Token::EOF || token == Token::RightBrace {
+                break;
+            }
+            self.declaration()?;
+        }
+        self.expect(Token::RightBrace, "expected enclosing '}'")?;
+        self.load_const(Constant::Nil)?;
         self.push_bytecode(ByteCode::Ret)?;
+        self.end_scope()?;
         let chunk = self.curr_chunk.take().unwrap();
         match self.prog.load_const(Constant::String(name.clone())) {
             Ok(idx) => idx,
@@ -374,10 +396,8 @@ impl Compiler {
             if count > 0 {
                 self.expect(Token::Comma, "expected ',' param seperator")?;
             }
-            // TODO: push as local variable
             self.expect(Token::Identifer, "expected param name")?;
-            self.push_local()?; // the next step in defining a local variable is at runtime
-                                // (loading it's value in the VM's stack)
+            self.push_local()?; // TODO: typecheck
             self.expect(Token::Colon, "expected ':' param type seperator")?;
             self.compile_type()?;
             count += 1;
@@ -467,6 +487,20 @@ impl Compiler {
         Ok(())
     }
 
+    fn compile_return(&mut self) -> Result<(), CompilerError> {
+        if !self.check(Token::SemiColon)? {
+            self.expression()?;
+        } else {
+            self.load_const(Constant::Nil)?;
+        }
+        self.expect(Token::SemiColon, "expected ';' after statement")?;
+        if self.curr_chunk.is_none() {
+            return Err(self.error("'return' can only be used inside a function"));
+        }
+        self.push_bytecode(ByteCode::Ret)?;
+        Ok(())
+    }
+
     fn compile_print(&mut self) -> Result<(), CompilerError> {
         self.expression()?;
         self.expect(Token::SemiColon, "expected ';' after statement")?;
@@ -478,7 +512,6 @@ impl Compiler {
 // expression statement grammar
 impl Compiler {
     fn literal(&mut self, _: bool) -> Result<(), CompilerError> {
-        // TODO: handle result
         match self.curr.tokn {
             Token::Int(val) => self.load_const(Constant::Integer(val))?,
             Token::Float(val) => self.load_const(Constant::Float(val))?,
@@ -589,7 +622,10 @@ impl Compiler {
     fn get_chunk(&mut self) -> Result<&mut Chunk, CompilerError> {
         match self.curr_chunk {
             Some(ref mut chunk) => Ok(chunk),
-            None => Err(self.error("non-declarative statements must be wrapped within functions"))
+            None if self.declarative_mode => {
+                Ok(&mut self.prog)
+            },
+            _ => Err(self.error("non-declarative statements must be wrapped within functions"))
         }
     }
 
@@ -711,12 +747,13 @@ impl Compiler {
     }
 
     fn check(&mut self, what: Token) -> Result<bool, CompilerError> {
-        if self.peek()?.tokn == what {
+        let tokn = self.peek()?.tokn;
+        Ok(if tokn == Token::EOF || tokn == what {
             self.next()?;
-            Ok(true)
+            true
         } else {
-            Ok(false)
-        }
+            false
+        })
     }
 
     fn error(&self, msg: &'static str) -> CompilerError {

@@ -1,9 +1,9 @@
-func fib(n: Int) -> Int {
+func fib(n: Float) -> Float {
 	if n <= 1 {
 		return 1;
 	}
- 	let a = 1;
- 	let b = 1;
+ 	let a = 1.0;
+ 	let b = 1.0;
  	while n > 0 {
  		a = a + b;
  		b = a - b;
@@ -13,6 +13,6 @@ func fib(n: Int) -> Int {
 }
 
 func main() {
-	let fib = fib(100);
-	print(fib);
+	let result = fib(123);
+	print(result);
 }
