@@ -18,5 +18,5 @@ func get_fib() -> Func {
 
 func main() {
     let target = 123;
-	print("get_fib(", target, ") =", get_fib()(target));
+	print("get_fib()(", target, ") =", get_fib()(target));
 }

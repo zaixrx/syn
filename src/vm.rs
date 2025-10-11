@@ -1,11 +1,10 @@
-use std::rc::Rc;
-
 type VMError = String;
+pub type ChunksCount = u8;
 pub type ConstsCount = u8;
 pub type ArgsCount = u8;
 pub type LocalsCount = u8;
 pub type GlobalsCount = u8;
-pub type ChunkCount = usize;
+pub type ChunkSize = usize;
 
 pub struct VM {
     stack: Vec<Constant>,
@@ -13,21 +12,45 @@ pub struct VM {
     call_stack: Vec<CallFrame>,
 }
 
-#[derive(Clone)]
-pub struct CallFrame {
-    ip: IdxPtr,
-    func: Func,
-    stack_offset: usize,
+pub struct Program {
+    pub chunks: Vec<Chunk>,
 }
 
-type IdxPtr = usize;
+impl Program {
+    pub fn new() -> Self {
+        Self {
+            chunks: vec![Chunk::new()],
+        }
+    }
+
+    pub fn get_top_level_chunk(&mut self) -> &mut Chunk {
+        &mut self.chunks[0]
+    }
+
+    pub fn push(&mut self, c: Chunk) -> Result<ChunksCount, &'static str> {
+        let idx = self.chunks.len() as ChunksCount;
+        if idx == ChunksCount::MAX {
+            Err("exceeded the number of possible functions in a program")
+        } else {
+            self.chunks.push(c);
+            Ok(idx)
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct CallFrame {
+    func: Func,
+    ip: ChunkSize,
+    stack_offset: usize,
+}
 
 #[derive(Debug, Clone)]
 pub struct Func {
     pub arity: usize,
     pub name: String,
-    pub chunk: Rc<Chunk>,
     pub retype: Type,
+    pub chunk: ChunksCount,
 }
 
 impl PartialEq for Func {
@@ -37,12 +60,12 @@ impl PartialEq for Func {
 }
 
 impl Func {
-    pub fn new(name: String, arity: usize, retype: Type, chunk: Chunk) -> Self {
+    pub fn new() -> Self {
         Self {
-            name,
-            arity,
-            retype,
-            chunk: Rc::new(chunk),
+            arity: 0,
+            chunk: 0,
+            retype: Type::None,
+            name: String::new(),
         }
     }
 }
@@ -143,8 +166,8 @@ pub enum ByteCode {
     LGet(LocalsCount),
     LSet(LocalsCount),
 
-    Jump(ChunkCount),
-    JumpIfFalse(ChunkCount),
+    Jump(ChunkSize),
+    JumpIfFalse(ChunkSize),
     Call(ArgsCount),
 
     Ret,
@@ -245,15 +268,15 @@ impl VM {
     }
 
     #[allow(unsafe_op_in_unsafe_fn)]
-    pub unsafe fn exec(mut self, prog: Chunk) -> Result<(), VMError> {
+    pub unsafe fn exec(mut self, prog: Program) -> Result<(), VMError> {
         let mut frame = CallFrame {
             ip: 0,
             stack_offset: 0,
-            func: Func::new(String::from("__prog__"), 0, Type::None, prog),
+            func: Func::new(),
         };
-        while frame.ip < frame.func.chunk.count() {
-            let chunk = &frame.func.chunk;
+        while frame.ip < prog.chunks[frame.func.chunk as usize].count() {
             // chunk.disassemble_one(frame.ip);
+            let chunk = &prog.chunks[frame.func.chunk as usize];
             let byte = chunk.code[frame.ip];
             match byte {
                 ByteCode::Push(i) => {

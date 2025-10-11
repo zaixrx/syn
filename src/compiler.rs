@@ -1,14 +1,14 @@
 use crate::lexer::{Lexer, Token, TokenHeader};
 
 use crate::vm::{
-    ArgsCount, ByteCode, Chunk, ChunkCount, Constant, Func, GlobalsCount, LocalsCount, Type,
+    ArgsCount, ByteCode, Chunk, ChunkSize, Constant, Func, GlobalsCount, LocalsCount, Program, Type,
 };
 
 pub struct Compiler {
     lexer: Lexer,
     curr: TokenHeader,
 
-    prog: Chunk,
+    prog: Program,
     globals: Vec<Global>,
     curr_chunk: Option<Chunk>,
     locals: Vec<Local>,
@@ -69,7 +69,7 @@ impl Compiler {
                 lexm: String::new(),
             },
 
-            prog: Chunk::new(),
+            prog: Program::new(),
             globals: Vec::new(),
             curr_chunk: None,
             locals: Vec::with_capacity(LocalsCount::MAX as usize),
@@ -82,7 +82,7 @@ impl Compiler {
         }
     }
 
-    pub fn compile(mut self) -> Result<Chunk, Vec<CompilerError>> {
+    pub fn compile(mut self) -> Result<Program, Vec<CompilerError>> {
         let mut errs = Vec::new();
         loop {
             match self.declaration() {
@@ -103,7 +103,9 @@ impl Compiler {
             Err(errs)
         } else {
             if let Some(idx) = self.resolve_global("main") {
-                self.prog.pushs(ByteCode::GGet(idx), ByteCode::Call(0));
+                self.prog
+                    .get_top_level_chunk()
+                    .pushs(ByteCode::GGet(idx), ByteCode::Call(0));
             } else {
                 return Err(vec![
                     self.error("consider adding `func main()` to your program"),
@@ -357,11 +359,15 @@ impl Compiler {
         self.expect(Token::Identifer, "expected the function's name")?;
         self.push_global()?;
         let func = self.compile_func_body(self.curr.lexm.clone())?;
-        match self.prog.load_const(Constant::Function(func)) {
+        match self
+            .prog
+            .get_top_level_chunk()
+            .load_const(Constant::Function(func))
+        {
             Ok(idx) => idx,
             Err(msg) => return Err(self.error(msg)),
         };
-        self.prog.push(ByteCode::GDef);
+        self.prog.get_top_level_chunk().push(ByteCode::GDef);
         Ok(())
     }
 
@@ -386,8 +392,16 @@ impl Compiler {
         self.load_const(Constant::Nil)?;
         self.push_bytecode(ByteCode::Ret)?;
         self.end_scope()?;
-        let chunk = self.curr_chunk.take().unwrap();
-        Ok(Func::new(name, arity, retype, chunk))
+        let chunk = match self.prog.push(self.curr_chunk.take().unwrap()) {
+            Ok(idx) => idx,
+            Err(msg) => return Err(self.error(msg)),
+        };
+        Ok(Func {
+            name,
+            arity,
+            retype,
+            chunk,
+        })
     }
 
     fn compile_params(&mut self) -> Result<usize, CompilerError> {
@@ -630,7 +644,7 @@ impl Compiler {
     fn get_chunk(&mut self) -> Result<&mut Chunk, CompilerError> {
         match self.curr_chunk {
             Some(ref mut chunk) => Ok(chunk),
-            None if self.declarative_mode => Ok(&mut self.prog),
+            None if self.declarative_mode => Ok(self.prog.get_top_level_chunk()),
             _ => Err(self.error("non-declarative statements must be wrapped within functions")),
         }
     }
@@ -740,12 +754,12 @@ impl Compiler {
         None
     }
 
-    fn patch_jump(&mut self, idx: ChunkCount) -> Result<(), CompilerError> {
+    fn patch_jump(&mut self, idx: ChunkSize) -> Result<(), CompilerError> {
         self.set_bytecode(idx, ByteCode::Jump(self.bytecode_count()?))?;
         Ok(())
     }
 
-    fn patch_fjump(&mut self, idx: ChunkCount) -> Result<(), CompilerError> {
+    fn patch_fjump(&mut self, idx: ChunkSize) -> Result<(), CompilerError> {
         self.set_bytecode(idx, ByteCode::JumpIfFalse(self.bytecode_count()?))?;
         Ok(())
     }
