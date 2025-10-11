@@ -1,19 +1,6 @@
-use crate::lexer::{
-    Lexer,
-    Token,
-    TokenHeader,
-};
+use crate::lexer::{Lexer, Token, TokenHeader};
 
-use crate::vm::{
-    Func,
-    Type,
-    Chunk,
-    ByteCode,
-    Constant,
-    ArgsCount,
-    LocalsCount,
-    GlobalsCount
-};
+use crate::vm::{ArgsCount, ByteCode, Chunk, Constant, Func, GlobalsCount, LocalsCount, Type};
 
 pub struct Compiler {
     lexer: Lexer,
@@ -58,7 +45,7 @@ enum Precedence {
     Factor,
     Unary,
     Call,
-    Primary
+    Primary,
 }
 
 type RuleFn = fn(&mut Compiler, cab_assign: bool) -> Result<(), CompilerError>;
@@ -73,7 +60,12 @@ impl Compiler {
     pub fn new(src: String) -> Self {
         Self {
             lexer: Lexer::new(src),
-            curr: TokenHeader { tokn: Token::EOF, coln: 0, line: 0, lexm: String::new() },
+            curr: TokenHeader {
+                tokn: Token::EOF,
+                coln: 0,
+                line: 0,
+                lexm: String::new(),
+            },
 
             prog: Chunk::new(),
             globals: Vec::new(),
@@ -101,7 +93,9 @@ impl Compiler {
                     }
                 }
             };
-            if self.curr.tokn == Token::EOF { break; }
+            if self.curr.tokn == Token::EOF {
+                break;
+            }
         }
         if self.had_error {
             Err(errs)
@@ -109,9 +103,9 @@ impl Compiler {
             if let Some(idx) = self.resolve_global("main") {
                 self.prog.push(ByteCode::Call(idx, 0));
             } else {
-                return Err(
-                    vec![self.error("consider adding `func main()` to your program")]
-                )
+                return Err(vec![
+                    self.error("consider adding `func main()` to your program"),
+                ]);
             }
             Ok(self.prog)
         }
@@ -125,21 +119,17 @@ impl Compiler {
                 return true;
             }
             prev = match self.peek() {
-                Ok(t) => {
-                    t.tokn
-                },
-                Err(_) => {
-                    return false
-                }
+                Ok(t) => t.tokn,
+                Err(_) => return false,
             };
             match prev {
-                Token::Func   |
-                Token::Let    |
-                Token::If     |
-                Token::While  |
-                Token::Print  |
-                Token::Return => return true,
-                _ => ()
+                Token::Func
+                | Token::Let
+                | Token::If
+                | Token::While
+                | Token::Print
+                | Token::Return => return true,
+                _ => (),
             };
             if self.next().is_err() {
                 return false;
@@ -160,13 +150,13 @@ impl Compiler {
                 self.next()?;
                 self.compile_let()?;
                 self.declarative_mode = false;
-            },
+            }
             Token::Func => {
                 self.declarative_mode = true;
                 self.next()?;
                 self.compile_func()?;
                 self.declarative_mode = false;
-            },
+            }
             _ => {
                 return self.statement();
             }
@@ -182,34 +172,34 @@ impl Compiler {
             Token::If => {
                 self.next()?;
                 self.compile_if()?;
-            },
+            }
             Token::While => {
                 self.next()?;
                 self.compile_while()?;
-            },
+            }
             Token::Print => {
                 self.next()?;
                 self.compile_print()?;
-            },
+            }
             Token::LeftBrace => {
                 self.next()?;
                 self.compile_block()?;
-            },
+            }
             Token::Break => {
                 self.next()?;
                 self.compile_break()?;
-            },
+            }
             Token::Continue => {
                 self.next()?;
                 self.compile_continue()?;
-            },
+            }
             Token::Return => {
                 self.next()?;
                 self.compile_return()?;
-            },
+            }
             Token::EOF => {
                 self.next()?;
-            },
+            }
             _ => {
                 self.expression()?;
                 self.expect(Token::SemiColon, "expected ';' after statement")?;
@@ -232,7 +222,9 @@ impl Compiler {
                 loop {
                     let infix_tok = self.peek()?;
                     let infix_rule = self.get_rule(infix_tok.tokn);
-                    if precedence > infix_rule.prec { break; }
+                    if precedence > infix_rule.prec {
+                        break;
+                    }
                     if let Some(infix) = infix_rule.infix {
                         self.next()?;
                         infix(self, can_assign)?;
@@ -243,8 +235,8 @@ impl Compiler {
                 if can_assign && self.peek()?.tokn == Token::Equal {
                     return Err(self.error("invalid assignment target"));
                 }
-            },
-            None => return Err(self.error("expected expression"))
+            }
+            None => return Err(self.error("expected expression")),
         }
         Ok(())
     }
@@ -259,7 +251,7 @@ impl Compiler {
             Token::Identifer => Rule {
                 prefix: Some(Compiler::identifer),
                 infix: None,
-                prec: Precedence::Primary
+                prec: Precedence::Primary,
             },
             Token::Int(_) => Rule {
                 prefix: Some(Compiler::literal),
@@ -274,7 +266,7 @@ impl Compiler {
             Token::String => Rule {
                 prefix: Some(Compiler::literal),
                 infix: None,
-                prec: Precedence::Primary
+                prec: Precedence::Primary,
             },
             Token::Bool(_) => Rule {
                 prefix: Some(Compiler::literal),
@@ -321,8 +313,7 @@ impl Compiler {
                 infix: Some(Compiler::binary),
                 prec: Precedence::Equality,
             },
-            Token::Greater | Token::Less |
-            Token::GreaterEqual | Token::LessEqual => Rule {
+            Token::Greater | Token::Less | Token::GreaterEqual | Token::LessEqual => Rule {
                 prefix: None,
                 infix: Some(Compiler::binary),
                 prec: Precedence::Comparison,
@@ -331,12 +322,12 @@ impl Compiler {
                 prefix: None,
                 infix: None,
                 prec: Precedence::None,
-            }
+            },
         }
     }
 }
 
-// non-expression statement grammar 
+// non-expression statement grammar
 impl Compiler {
     fn compile_let(&mut self) -> Result<(), CompilerError> {
         self.expect(Token::Identifer, "expected identifer")?;
@@ -359,14 +350,14 @@ impl Compiler {
 
     fn compile_func(&mut self) -> Result<(), CompilerError> {
         if self.curr_chunk.is_some() {
-            return Err(self.error("can't have nested functions"))
+            return Err(self.error("can't have nested functions"));
         }
         self.expect(Token::Identifer, "expected the function's name")?;
         self.push_global()?;
         let func = self.compile_func_body(self.curr.lexm.clone())?;
         match self.prog.load_const(Constant::Function(func)) {
             Ok(idx) => idx,
-            Err(msg) => return Err(self.error(msg))
+            Err(msg) => return Err(self.error(msg)),
         };
         self.prog.push(ByteCode::GDef);
         Ok(())
@@ -420,10 +411,10 @@ impl Compiler {
 
     fn compile_type(&mut self) -> Result<Type, CompilerError> {
         let typ = match self.peek()?.tokn {
-            Token::IntT   => Type::Integer,
+            Token::IntT => Type::Integer,
             Token::FloatT => Type::Float,
-            Token::BoolT  => Type::Bool,
-            Token::StrT   => Type::String,
+            Token::BoolT => Type::Bool,
+            Token::StrT => Type::String,
             _ => return Err(self.error("expected valid type")),
         };
         self.next()?;
@@ -438,7 +429,10 @@ impl Compiler {
         self.push_bytecode(ByteCode::Jump(self.loop_state.start))?;
         self.patch_fjump(loop_cond)?;
         for i in 0..self.loop_state.break_jumps.len() {
-            self.set_bytecode(self.loop_state.break_jumps[i], ByteCode::Jump(self.bytecode_count()?))?;
+            self.set_bytecode(
+                self.loop_state.break_jumps[i],
+                ByteCode::Jump(self.bytecode_count()?),
+            )?;
         }
         self.loop_state.end_loop();
         Ok(())
@@ -514,9 +508,10 @@ impl Compiler {
     }
 
     fn compile_print(&mut self) -> Result<(), CompilerError> {
-        self.expression()?;
+        self.expect(Token::LeftParen, "expected disclosing '('")?;
+        let count = self.args()?;
         self.expect(Token::SemiColon, "expected ';' after statement")?;
-        self.push_bytecode(ByteCode::Print)?;
+        self.push_bytecode(ByteCode::Print(count))?;
         Ok(())
     }
 }
@@ -529,11 +524,11 @@ impl Compiler {
             Token::Float(val) => self.load_const(Constant::Float(val))?,
             Token::Bool(val) => self.load_const(Constant::Bool(val))?,
             Token::String => {
-                let s = &self.curr.lexm[1..self.curr.lexm.len()-1];
+                let s = &self.curr.lexm[1..self.curr.lexm.len() - 1];
                 self.load_const(Constant::String(s.into()))?
-            },
+            }
             Token::Nil => self.load_const(Constant::Nil)?,
-            _ => panic!("Compiler::literal ~ unhandled literal {:?}", self.curr)
+            _ => panic!("Compiler::literal ~ unhandled literal {:?}", self.curr),
         };
         Ok(())
     }
@@ -548,7 +543,7 @@ impl Compiler {
                 } else {
                     self.push_bytecode(ByteCode::LGet(idx))?;
                 }
-            },
+            }
             None => {
                 if let Some(idx) = self.resolve_global(self.curr.lexm.as_str()) {
                     if can_assign && self.check(Token::Equal)? {
@@ -579,20 +574,19 @@ impl Compiler {
         loop {
             let curr = self.peek()?.tokn;
             if curr == Token::RightParen || curr == Token::EOF {
-                break;
+                self.expect(Token::RightParen, "expected enclosing ')'")?;
+                return Ok(count);
             }
             if count > 0 {
                 self.expect(Token::Comma, "expected ',' arg seperator")?;
             }
             self.expression()?;
             count += if count > ArgsCount::MAX {
-                return Err(self.error("exceeded max args limit"))
+                return Err(self.error("exceeded max args limit"));
             } else {
                 1
             };
         }
-        self.expect(Token::RightParen, "expected enclosing ')'")?;
-        Ok(count)
     }
 
     fn unary(&mut self, _: bool) -> Result<(), CompilerError> {
@@ -601,7 +595,7 @@ impl Compiler {
         self.push_bytecode(match op_tok {
             Token::Minus => ByteCode::Neg,
             Token::Bang => ByteCode::Not,
-            _ => panic!("Compiler::unary ~ invalid unary operator")
+            _ => panic!("Compiler::unary ~ invalid unary operator"),
         })?;
         Ok(())
     }
@@ -622,7 +616,7 @@ impl Compiler {
             Token::Less => self.push_bytecode(ByteCode::Less)?,
             Token::GreaterEqual => self.push_bytecodes(ByteCode::Less, ByteCode::Not)?,
             Token::LessEqual => self.push_bytecodes(ByteCode::Greater, ByteCode::Not)?,
-            _ => return Err(self.error("invalid binary operator"))
+            _ => return Err(self.error("invalid binary operator")),
         };
         Ok(())
     }
@@ -634,10 +628,8 @@ impl Compiler {
     fn get_chunk(&mut self) -> Result<&mut Chunk, CompilerError> {
         match self.curr_chunk {
             Some(ref mut chunk) => Ok(chunk),
-            None if self.declarative_mode => {
-                Ok(&mut self.prog)
-            },
-            _ => Err(self.error("non-declarative statements must be wrapped within functions"))
+            None if self.declarative_mode => Ok(&mut self.prog),
+            _ => Err(self.error("non-declarative statements must be wrapped within functions")),
         }
     }
 
@@ -665,7 +657,7 @@ impl Compiler {
     fn load_const(&mut self, c: Constant) -> Result<u8, CompilerError> {
         match self.get_chunk()?.load_const(c) {
             Ok(idx) => Ok(idx),
-            Err(msg) => Err(self.error(msg))
+            Err(msg) => Err(self.error(msg)),
         }
     }
 }
@@ -693,10 +685,11 @@ impl Compiler {
         if self.globals.len() > GlobalsCount::MAX as usize {
             return Err(self.error("exceeded maximum number of global bindings."));
         }
-        dbg!(&self.curr);
         for global in self.globals.iter() {
             if global.token.lexm == self.curr.lexm {
-                return Err(self.error("variable identifiers must be unique within the current scope."));
+                return Err(
+                    self.error("variable identifiers must be unique within the current scope.")
+                );
             }
         }
         self.globals.push(Global {
@@ -724,12 +717,14 @@ impl Compiler {
                 break;
             }
             if local.token.lexm == self.curr.lexm {
-                return Err(self.error("variable identifiers must be unique within the current scope."));
+                return Err(
+                    self.error("variable identifiers must be unique within the current scope.")
+                );
             }
         }
         self.locals.push(Local {
             token: self.curr.clone(),
-            scope_depth: self.scope_depth
+            scope_depth: self.scope_depth,
         });
         Ok(())
     }
@@ -761,24 +756,22 @@ impl Compiler {
             Ok(tok) => {
                 self.curr = tok;
                 Ok(())
-            },
-            Err(e) => {
-                Err(CompilerError::new(e.line, e.coln, e.mssg, e.lexm))
             }
+            Err(e) => Err(CompilerError::new(e.line, e.coln, e.mssg, e.lexm)),
         }
     }
 
     fn peek(&mut self) -> Result<TokenHeader, CompilerError> {
         match self.lexer.peek() {
             Ok(tok) => Ok(tok),
-            Err(e) => Err(CompilerError::new(e.line, e.coln, e.mssg, e.lexm))
+            Err(e) => Err(CompilerError::new(e.line, e.coln, e.mssg, e.lexm)),
         }
     }
 
     fn expect(&mut self, what: Token, msg: &'static str) -> Result<(), CompilerError> {
         match self.peek()? {
             t if t.tokn == what => self.next(),
-            t => Err(CompilerError::new(t.line, t.coln, msg, t.lexm))
+            t => Err(CompilerError::new(t.line, t.coln, msg, t.lexm)),
         }
     }
 
@@ -812,20 +805,29 @@ impl CompilerError {
             coln: tok.coln,
             lexm: match tok.tokn {
                 Token::EOF => String::from("end"),
-                _ => tok.lexm.clone()
+                _ => tok.lexm.clone(),
             },
             mssg,
         }
     }
 
     pub fn new(line: usize, coln: usize, mssg: &'static str, lexm: String) -> Self {
-        Self { line, coln, mssg, lexm }
+        Self {
+            line,
+            coln,
+            mssg,
+            lexm,
+        }
     }
 }
 
 impl std::fmt::Display for CompilerError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "at {}-{}: {} at {}", self.line, self.coln, self.mssg, self.lexm)
+        write!(
+            f,
+            "at {}-{}: {} at {}",
+            self.line, self.coln, self.mssg, self.lexm
+        )
     }
 }
 

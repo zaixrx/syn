@@ -1,3 +1,2 @@
-- improve global variables by substituting their refrences with indecies at runtime
 - symantic analyzer and type checker at compile-time - add un-initialized state for both globals and locals
 - revisit the limits imposed on (max_locals, max_instructions_in_block, max_params)

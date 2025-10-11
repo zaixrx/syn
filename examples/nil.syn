@@ -1,0 +1,7 @@
+func main() {
+    let a;
+    print(a == nil); // true
+    a = 69420;
+    print(a);
+    a = nil;
+}

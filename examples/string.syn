@@ -1,0 +1,6 @@
+func main() {
+    let hello = "hello";
+    let world = "world";
+    let hello_world = hello + " " + world;
+    print(hello_world);
+}

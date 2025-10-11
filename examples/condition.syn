@@ -1,0 +1,14 @@
+func main() {
+    if false {
+        print "no hello";
+    } else if true {
+        if false {
+            print "no hello";
+        } else {
+            print "hello";
+        }
+        print "world";
+    } else {
+        print "no hello";
+    }
+}

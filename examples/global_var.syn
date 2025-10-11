@@ -1,0 +1,11 @@
+func return_5() {
+    return 5;
+}
+
+let a = return_5();
+let b = a * 2;
+
+func main() {
+    print("a:", a);
+    print("b:", b);
+}

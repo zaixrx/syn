@@ -108,30 +108,32 @@ impl Lexer {
     fn consume_integer(&mut self) {
         self.curr = match self.src[self.curr..].find(|c: char| !c.is_ascii_digit()) {
             Some(end) => self.curr + end,
-            None => self.src.len()
+            None => self.src.len(),
         };
     }
 
+    fn is_valid_id(&self, c: char) -> bool {
+        c.is_alphanumeric() || c == '_'
+    }
+
     fn consume_id(&mut self) {
-        self.curr = match self.src[self.curr..].find(|c: char| !(c.is_ascii_alphanumeric())) {
+        self.curr = match self.src[self.curr..].find(|c: char| !(self.is_valid_id(c))) {
             Some(end) => self.curr + end,
-            None => self.src.len()
+            None => self.src.len(),
         };
     }
 
     fn consume_string(&mut self) -> Result<(), LexerError> {
-        match self.src[self.curr+1..].find('"') {
+        match self.src[self.curr + 1..].find('"') {
             Some(end) => {
-                self.curr += end+2;
+                self.curr += end + 2;
                 Ok(())
-            },
-            None => Err(
-                LexerError::new("expected trailing \"", &self)
-            )
+            }
+            None => Err(LexerError::new("expected trailing \"", &self)),
         }
     }
 
-    fn consume_char(&mut self) -> Option<char>{
+    fn consume_char(&mut self) -> Option<char> {
         loop {
             match self.src.chars().nth(self.curr) {
                 Some(c) => {
@@ -143,7 +145,7 @@ impl Lexer {
                         return Some(c);
                     }
                     self.start = self.curr;
-                },
+                }
                 None => return None,
             };
         }
@@ -154,10 +156,10 @@ impl Lexer {
             Some(c) => {
                 if c == e {
                     self.curr += 1;
-                } 
+                }
                 c == e
-            },
-            None => false
+            }
+            None => false,
         }
     }
 
@@ -165,12 +167,14 @@ impl Lexer {
         self.start = self.curr;
         let c = match self.consume_char() {
             Some(c) => c,
-            None => return Ok(TokenHeader {
-                tokn: Token::EOF,
-                coln: self.start - self.line_start + 1,
-                line: self.line,
-                lexm: String::from(&self.src[self.start..self.curr])
-            })
+            None => {
+                return Ok(TokenHeader {
+                    tokn: Token::EOF,
+                    coln: self.start - self.line_start + 1,
+                    line: self.line,
+                    lexm: String::from(&self.src[self.start..self.curr]),
+                });
+            }
         };
         let tok = match c {
             '(' => Token::LeftParen,
@@ -184,16 +188,17 @@ impl Lexer {
                 } else {
                     Token::Minus
                 }
-            },
+            }
             '/' => {
                 if self.match_char('/') {
-                    self.curr += self.src[self.curr..].find('\n')
+                    self.curr += self.src[self.curr..]
+                        .find('\n')
                         .unwrap_or_else(|| self.src.len() - (self.curr + 1));
                     return self.next();
                 } else {
                     Token::Slash
                 }
-            },
+            }
             '+' => Token::Plus,
             '*' => Token::Star,
             '=' => {
@@ -202,42 +207,42 @@ impl Lexer {
                 } else {
                     Token::Equal
                 }
-            },
+            }
             '!' => {
                 if self.match_char('=') {
                     Token::BangEqual
                 } else {
                     Token::Bang
                 }
-            },
+            }
             '<' => {
                 if self.match_char('=') {
                     Token::LessEqual
                 } else {
                     Token::Less
                 }
-            },
+            }
             '>' => {
                 if self.match_char('=') {
                     Token::GreaterEqual
                 } else {
                     Token::Greater
                 }
-            },
+            }
             '|' => {
                 if self.match_char('|') {
                     Token::Or
                 } else {
-                    return Err(LexerError::new("there is no '|' operator", self))
+                    return Err(LexerError::new("there is no '|' operator", self));
                 }
-            },
+            }
             '&' => {
                 if self.match_char('&') {
                     Token::And
                 } else {
-                    return Err(LexerError::new("there is no '|' operator", self))
+                    return Err(LexerError::new("there is no '|' operator", self));
                 }
-            },
+            }
             ':' => Token::Colon,
             ',' => Token::Comma,
             c if c.is_ascii_digit() => {
@@ -249,12 +254,12 @@ impl Lexer {
                 } else {
                     Token::Int(self.src[self.start..self.curr].parse::<i32>().unwrap())
                 }
-            },
+            }
             '"' => {
                 self.curr -= 1;
                 self.consume_string()?;
                 Token::String
-            },
+            }
             c if c.is_ascii_alphabetic() => {
                 self.curr -= 1;
                 self.consume_id();
@@ -275,18 +280,16 @@ impl Lexer {
                     "Float" => Token::FloatT,
                     "Str" => Token::StrT,
                     "Bool" => Token::BoolT,
-                    _ => Token::Identifer
+                    _ => Token::Identifer,
                 }
-            },
-            _ => return Err(
-                LexerError::new("invalid character", &self)
-            )
+            }
+            _ => return Err(LexerError::new("invalid character", &self)),
         };
         Ok(TokenHeader {
             tokn: tok,
             coln: self.start - self.line_start + 1,
             line: self.line,
-            lexm: String::from(&self.src[self.start..self.curr])
+            lexm: String::from(&self.src[self.start..self.curr]),
         })
     }
 

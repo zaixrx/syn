@@ -1,2 +1,0 @@
-print((100 + 2 * (11 * 2)) * 313);
-print(3.14 + 2.71 + nil); // should be a runtime error

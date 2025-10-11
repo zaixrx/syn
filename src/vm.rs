@@ -11,7 +11,6 @@ pub struct VM {
     call_stack: Vec<CallFrame>,
 }
 
-// TODO: work with a reference
 #[derive(Clone)]
 pub struct CallFrame {
     ip: IdxPtr,
@@ -31,9 +30,7 @@ pub struct Func {
 
 impl PartialEq for Func {
     fn eq(&self, other: &Self) -> bool {
-        self.name == other.name &&
-        self.arity == other.arity &&
-        self.retype == other.retype
+        self.name == other.name && self.arity == other.arity && self.retype == other.retype
     }
 }
 
@@ -56,28 +53,28 @@ pub enum Constant {
     Bool(bool),
     String(String),
     Function(Func),
-    Nil
+    Nil,
 }
 
 impl Constant {
     fn to_bool(self) -> bool {
         match self {
             Constant::Bool(false) | Constant::Nil => false,
-            _ => true
+            _ => true,
         }
     }
 
     fn expect_integer(self) -> i32 {
         match self {
             Constant::Integer(x) => x,
-            _ => panic!("expected integer")
+            _ => panic!("expected integer"),
         }
     }
 
     fn expect_bool(self) -> bool {
         match self {
             Constant::Bool(x) => x,
-            _ => panic!("expected bool")
+            _ => panic!("expected bool"),
         }
     }
 
@@ -91,6 +88,12 @@ impl Constant {
             Constant::Nil => Type::None,
         }
     }
+
+    fn is_of_type(&self, other: &Constant) -> bool {
+        let t1 = self.get_var_type();
+        let t2 = other.get_var_type();
+        t1 == t2 || t1 == Type::None || t2 == Type::None
+    }
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -100,7 +103,7 @@ pub enum Type {
     Bool,
     String,
     Function,
-    None 
+    None,
 }
 
 #[repr(u8)]
@@ -122,7 +125,7 @@ pub enum ByteCode {
     Or,
     And,
 
-    Print,
+    Print(ArgsCount),
 
     GDef,
     GGet(GlobalsCount),
@@ -181,16 +184,18 @@ impl Chunk {
         }
     }
 
+    #[allow(unused)]
     pub fn disassemble_one(&self, idx: usize) {
         print!("{:?} :: ", idx);
         match self.code[idx] {
             ByteCode::Push(i) => {
                 println!("Push {} --> {:?}", i, self.consts[i as usize]);
-            },
-            byte => println!("{:?}", byte)
+            }
+            byte => println!("{:?}", byte),
         };
     }
 
+    #[allow(unused)]
     pub fn disassemble(&self) {
         println!("=======");
         for i in 0..self.code.len() {
@@ -226,7 +231,7 @@ impl VM {
     fn must_op<T>(&self, r: Option<T>, msg: &'static str) -> Result<T, VMError> {
         match r {
             Some(v) => Ok(v),
-            None => Err(VMError::from(msg))
+            None => Err(VMError::from(msg)),
         }
     }
 
@@ -241,74 +246,87 @@ impl VM {
         while frame.ip < (*frame.func).chunk.count() {
             let chunk = &(*frame.func).chunk;
             // chunk.disassemble_one(frame.ip);
-            let byte = chunk.code[frame.ip]; 
+            let byte = chunk.code[frame.ip];
             match byte {
                 ByteCode::Push(i) => {
                     if i as usize >= chunk.consts.len() {
                         return Err(format!("constant doesn't exist"));
                     }
                     self.push(chunk.consts[i as usize].clone());
-                },
-                ByteCode::Add | ByteCode::Sub |
-                ByteCode::Mul | ByteCode::Div |
-                ByteCode::Less | ByteCode::Greater => {
+                }
+                ByteCode::Add
+                | ByteCode::Sub
+                | ByteCode::Mul
+                | ByteCode::Div
+                | ByteCode::Less
+                | ByteCode::Greater => {
                     let y = self.pop();
                     let x = self.pop();
-                    if let Constant::Integer(x) = x && let Constant::Integer(y) = y {
+                    if let Constant::Integer(x) = x
+                        && let Constant::Integer(y) = y
+                    {
                         self.push(match byte {
                             ByteCode::Add => Constant::Integer(
-                                self.must_op(x.checked_add(y), "addition overflow")?
+                                self.must_op(x.checked_add(y), "addition overflow")?,
                             ),
                             ByteCode::Sub => Constant::Integer(
-                                self.must_op(x.checked_sub(y), "subtraction overflow")?
+                                self.must_op(x.checked_sub(y), "subtraction overflow")?,
                             ),
                             ByteCode::Mul => Constant::Integer(
-                                self.must_op(x.checked_mul(y), "multiplication overflow")?
+                                self.must_op(x.checked_mul(y), "multiplication overflow")?,
                             ),
                             ByteCode::Div => Constant::Integer(
-                                self.must_op(x.checked_div(y), "division overflow")?
+                                self.must_op(x.checked_div(y), "division overflow")?,
                             ),
                             ByteCode::Less => Constant::Bool(x < y),
                             ByteCode::Greater => Constant::Bool(x > y),
-                            _ => unreachable!()
+                            _ => unreachable!(),
                         });
-                    } else if let Constant::Float(x) = x && let Constant::Float(y) = y {
+                    } else if let Constant::Float(x) = x
+                        && let Constant::Float(y) = y
+                    {
                         self.push(match byte {
-                            ByteCode::Add => Constant::Float(
-                                {
-                                    let r = x + y;
-                                    self.must_op(r.is_finite().then_some(r), "addition overflow")?
-                                }
-                            ),
-                            ByteCode::Sub => Constant::Float(
-                                {
-                                    let r = x - y;
-                                    self.must_op(r.is_finite().then_some(r), "subtraction overflow")?
-                                }
-                            ),
-                            ByteCode::Mul => Constant::Float(
-                                {
-                                    let r = x * y;
-                                    self.must_op(r.is_finite().then_some(r), "multiplication overflow")?
-                                }
-                            ),
-                            ByteCode::Div => Constant::Float(
-                                {
-                                    let r = x / y;
-                                    self.must_op(r.is_finite().then_some(r), "division overflow")?
-                                }
-                            ),
+                            ByteCode::Add => Constant::Float({
+                                let r = x + y;
+                                self.must_op(r.is_finite().then_some(r), "addition overflow")?
+                            }),
+                            ByteCode::Sub => Constant::Float({
+                                let r = x - y;
+                                self.must_op(r.is_finite().then_some(r), "subtraction overflow")?
+                            }),
+                            ByteCode::Mul => Constant::Float({
+                                let r = x * y;
+                                self.must_op(r.is_finite().then_some(r), "multiplication overflow")?
+                            }),
+                            ByteCode::Div => Constant::Float({
+                                let r = x / y;
+                                self.must_op(r.is_finite().then_some(r), "division overflow")?
+                            }),
                             ByteCode::Less => Constant::Bool(x < y),
                             ByteCode::Greater => Constant::Bool(x > y),
-                            _ => unreachable!()
+                            _ => unreachable!(),
                         });
+                    } else if let Constant::String(x) = x
+                        && let Constant::String(y) = y
+                    {
+                        match byte {
+                            ByteCode::Add => {
+                                self.push(Constant::String(String::from(x + y.as_str())))
+                            }
+                            _ => return Err(format!("you can only concatenate strings with '+'")),
+                        }
                     } else {
-                        return Err(format!("operands must both be numbers"))
+                        return Err(format!("invalid operands for {:?}", byte));
                     }
-                },
-                ByteCode::Print => {
-                    println!("{}", self.pop());
-                },
+                }
+                ByteCode::Print(count) => {
+                    // TODO: utterly slow
+                    let mut buffer = String::new();
+                    for _ in 0..count {
+                        buffer = format!("{} {}", self.pop(), buffer);
+                    }
+                    println!("{}", buffer);
+                }
                 ByteCode::Neg => {
                     let x = self.pop().expect_integer();
                     self.push(Constant::Integer(-x))
@@ -319,9 +337,9 @@ impl VM {
                     self.push(match byte {
                         ByteCode::Or => Constant::Bool(x || y),
                         ByteCode::And => Constant::Bool(x && y),
-                        _ => unreachable!()
+                        _ => unreachable!(),
                     });
-                },
+                }
                 ByteCode::Equal => {
                     let y = self.pop();
                     let x = self.pop();
@@ -330,89 +348,58 @@ impl VM {
                 ByteCode::Not => {
                     let b = self.pop().expect_bool();
                     self.push(Constant::Bool(!b));
-                },
+                }
                 ByteCode::Pop => {
                     self.pop();
-                },
+                }
                 ByteCode::GDef => {
                     let val = self.pop();
                     self.globals.push(val);
-                },
+                }
                 ByteCode::GGet(idx) => {
                     self.push(self.globals[idx as usize].clone());
-                    // let name = self.pop().expect_string();
-                    // match self.globals.get(&name) {
-                    //     Some(var) => {
-                    //         if var.typ == Type::None {
-                    //             return Err(format!("can't use unintialized variable"));
-                    //         }
-                    //         self.push(var.val.clone());
-                    //     },
-                    //     None => return Err(format!("undefined variable"))
-                    // };
                 }
                 ByteCode::GSet(idx) => {
                     let val = self.peek().clone();
                     // TODO: move typechecking to compile time
-                    if val.get_var_type() != self.globals[idx as usize].get_var_type() {
-                            return Err(
-                                format!("mismatched types ({:?} != {:?})",
-                                    val.get_var_type(),
-                                    self.stack[idx as usize].get_var_type()
-                                )
-                            );
+                    if !self.globals[idx as usize].is_of_type(&val) {
+                        return Err(format!(
+                            "mismatched types ({:?} != {:?})",
+                            val.get_var_type(),
+                            self.stack[idx as usize].get_var_type()
+                        ));
                     }
                     self.globals[idx as usize] = val;
-                    // let name = self.pop().expect_string();
-                    // match self.globals.get(&name) {
-                    //     Some(var) => {
-                    //         if val.get_var_type() != var.typ {
-                    //             return Err(
-                    //                 format!("mismatched types ({:?} != {:?})",
-                    //                     val.get_var_type(),
-                    //                     var.typ
-                    //                 )
-                    //             );
-                    //         }
-                    //         self.globals.insert(name.into(), Var {
-                    //             typ: val.get_var_type(),
-                    //             val: val.clone()
-                    //         });
-                    //     },
-                    //     None => return Err(format!("undefined variable")),
-                    // };
-                    // self.push(val);
-                },
+                }
                 ByteCode::LDef => (), // yeah
-                ByteCode::LGet(offset) => self.push(self.stack[frame.stack_offset + offset as usize].clone()),
+                ByteCode::LGet(offset) => {
+                    self.push(self.stack[frame.stack_offset + offset as usize].clone())
+                }
                 ByteCode::LSet(offset) => {
                     let val = self.peek();
-                    if val.get_var_type() != self.stack[frame.stack_offset + offset as usize].get_var_type() {
-                            return Err(
-                                format!("mismatched types ({:?} != {:?})",
-                                    val.get_var_type(),
-                                    self.stack[frame.stack_offset + offset as usize].get_var_type()
-                                )
-                            );
+                    if !&self.stack[frame.stack_offset + offset as usize].is_of_type(val) {
+                        return Err(format!(
+                            "mismatched types ({:?} != {:?})",
+                            val.get_var_type(),
+                            self.stack[frame.stack_offset + offset as usize].get_var_type()
+                        ));
                     }
                     self.stack[frame.stack_offset + offset as usize] = val.clone();
-                },
+                }
                 ByteCode::Jump(dest) => {
                     frame.ip = dest - 1; // to make room for iterating
-                }, 
+                }
                 ByteCode::JumpIfFalse(dest) => {
                     if !self.pop().to_bool() {
                         frame.ip = dest - 1;
                     }
-                },
+                }
                 ByteCode::Call(idx, args_c) => {
                     // TODO: move additional check to typechecker at compile-time
                     let args = (0..args_c).map(|_| self.pop()).collect::<Vec<Constant>>();
                     if let Constant::Function(ref mut func) = self.globals[idx as usize] {
                         if func.arity != args_c as usize {
-                            return Err(
-                                format!("expected {} args got {}", func.arity, args_c)
-                            );
+                            return Err(format!("expected {} args got {}", func.arity, args_c));
                         }
                         let func_ptr = func as *mut Func;
                         self.push_func(frame.clone());
@@ -428,7 +415,7 @@ impl VM {
                     } else {
                         return Err(format!("invalid call target"));
                     }
-                },
+                }
                 ByteCode::Ret => {
                     let val = self.pop();
                     while self.stack.len() > frame.stack_offset {
@@ -455,7 +442,7 @@ impl VM {
 
 impl std::fmt::Display for Constant {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self { 
+        match self {
             Constant::Integer(val) => write!(f, "{}", val),
             Constant::Float(val) => write!(f, "{}", val),
             Constant::Bool(val) => write!(f, "{}", val),

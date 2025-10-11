@@ -34,7 +34,6 @@ fn main() {
     });
 
     let compiler = Compiler::new(src);
-
     let prog = compiler.compile().unwrap_or_else(|errs| {
         eprintln!("Codegen failed:");
         for err in errs {
@@ -42,7 +41,7 @@ fn main() {
         }
         process::exit(69)
     });
-    prog.disassemble();
+    // prog.disassemble();
 
     unsafe {
         VM::new().exec(prog).unwrap_or_else(|err| {
