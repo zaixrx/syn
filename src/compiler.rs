@@ -6,10 +6,13 @@ use crate::lexer::{
 
 use crate::vm::{
     Func,
+    Type,
     Chunk,
     ByteCode,
     Constant,
-    VarType,
+    ArgsCount,
+    LocalsCount,
+    GlobalsCount
 };
 
 pub struct Compiler {
@@ -17,6 +20,7 @@ pub struct Compiler {
     curr: TokenHeader,
 
     prog: Chunk,
+    globals: Vec<Global>,
     curr_chunk: Option<Chunk>,
     locals: Vec<Local>,
     scope_depth: usize,
@@ -25,6 +29,10 @@ pub struct Compiler {
     had_error: bool,
     panic_mode: bool,
     declarative_mode: bool, // used to prevent non-declarative top level code -- for structure
+}
+
+struct Global {
+    token: TokenHeader,
 }
 
 struct Local {
@@ -60,20 +68,20 @@ struct Rule {
     prec: Precedence,
 }
 
-pub type ArgsCount = u8;
-pub type LocalsCount = u8;
-
 // public methods
 impl Compiler {
     pub fn new(src: String) -> Self {
         Self {
             lexer: Lexer::new(src),
             curr: TokenHeader { tokn: Token::EOF, coln: 0, line: 0, lexm: String::new() },
+
+            prog: Chunk::new(),
+            globals: Vec::new(),
+            curr_chunk: None,
+            locals: Vec::with_capacity(LocalsCount::MAX as usize),
             scope_depth: 0,
             loop_state: LoopState::new(),
-            locals: Vec::with_capacity(LocalsCount::MAX as usize),
-            curr_chunk: None,
-            prog: Chunk::new(),
+
             had_error: false,
             panic_mode: false,
             declarative_mode: false,
@@ -98,10 +106,13 @@ impl Compiler {
         if self.had_error {
             Err(errs)
         } else {
-            if let Err(msg) = self.prog.load_const(Constant::String(String::from("main"))) {
-                return Err(vec![self.error(msg)]);
+            if let Some(idx) = self.resolve_global("main") {
+                self.prog.push(ByteCode::Call(idx, 0));
+            } else {
+                return Err(
+                    vec![self.error("consider adding `func main()` to your program")]
+                )
             }
-            self.prog.push(ByteCode::Call(0));
             Ok(self.prog)
         }
     }
@@ -333,7 +344,7 @@ impl Compiler {
             self.push_local()?;
             ByteCode::LDef
         } else {
-            self.load_const(Constant::String(self.curr.lexm.clone()))?;
+            self.push_global()?;
             ByteCode::GDef
         };
         if self.check(Token::Equal)? {
@@ -350,15 +361,25 @@ impl Compiler {
         if self.curr_chunk.is_some() {
             return Err(self.error("can't have nested functions"))
         }
-        self.start_scope();
-        self.curr_chunk = Some(Chunk::new());
         self.expect(Token::Identifer, "expected the function's name")?;
-        let name = self.curr.lexm.clone();
+        self.push_global()?;
+        let func = self.compile_func_body(self.curr.lexm.clone())?;
+        match self.prog.load_const(Constant::Function(func)) {
+            Ok(idx) => idx,
+            Err(msg) => return Err(self.error(msg))
+        };
+        self.prog.push(ByteCode::GDef);
+        Ok(())
+    }
+
+    fn compile_func_body(&mut self, name: String) -> Result<Func, CompilerError> {
+        self.curr_chunk = Some(Chunk::new());
+        self.start_scope();
         let arity = self.compile_params()?;
         let retype = if self.check(Token::RightArrow)? {
             self.compile_type()?
         } else {
-            VarType::None
+            Type::None
         };
         self.expect(Token::LeftBrace, "expected disclosing '{'")?;
         loop {
@@ -373,16 +394,7 @@ impl Compiler {
         self.push_bytecode(ByteCode::Ret)?;
         self.end_scope()?;
         let chunk = self.curr_chunk.take().unwrap();
-        match self.prog.load_const(Constant::String(name.clone())) {
-            Ok(idx) => idx,
-            Err(msg) => return Err(self.error(msg))
-        };
-        match self.prog.load_const(Constant::Function(Func::new(name, arity, retype, chunk))) {
-            Ok(idx) => idx,
-            Err(msg) => return Err(self.error(msg))
-        };
-        self.prog.push(ByteCode::GDef);
-        Ok(())
+        Ok(Func::new(name, arity, retype, chunk))
     }
 
     fn compile_params(&mut self) -> Result<usize, CompilerError> {
@@ -406,12 +418,12 @@ impl Compiler {
         Ok(count)
     }
 
-    fn compile_type(&mut self) -> Result<VarType, CompilerError> {
+    fn compile_type(&mut self) -> Result<Type, CompilerError> {
         let typ = match self.peek()?.tokn {
-            Token::IntT   => VarType::Integer,
-            Token::FloatT => VarType::Float,
-            Token::BoolT  => VarType::Bool,
-            Token::StrT   => VarType::String,
+            Token::IntT   => Type::Integer,
+            Token::FloatT => Type::Float,
+            Token::BoolT  => Type::Bool,
+            Token::StrT   => Type::String,
             _ => return Err(self.error("expected valid type")),
         };
         self.next()?;
@@ -528,37 +540,37 @@ impl Compiler {
 
     // REFACTOR
     fn identifer(&mut self, can_assign: bool) -> Result<(), CompilerError> {
-        let offset = self.resolve_local(self.curr.lexm.as_str());
-        if offset == -1 {
-            self.load_const(Constant::String(self.curr.lexm.clone()))?;
-            if can_assign && self.check(Token::Equal)? {
-                self.expression()?;
-                self.push_bytecode(ByteCode::GSet)?;
-            } else if self.check(Token::LeftParen)? {
-                self.call(can_assign)?;
-            } else {
-                self.push_bytecode(ByteCode::GGet)?;
+        match self.resolve_local(self.curr.lexm.as_str()) {
+            Some(idx) => {
+                if can_assign && self.check(Token::Equal)? {
+                    self.expression()?;
+                    self.push_bytecode(ByteCode::LSet(idx))?;
+                } else {
+                    self.push_bytecode(ByteCode::LGet(idx))?;
+                }
+            },
+            None => {
+                if let Some(idx) = self.resolve_global(self.curr.lexm.as_str()) {
+                    if can_assign && self.check(Token::Equal)? {
+                        self.expression()?;
+                        self.push_bytecode(ByteCode::GSet(idx))?;
+                    } else if self.check(Token::LeftParen)? {
+                        let args_count = self.args()?;
+                        self.push_bytecode(ByteCode::Call(idx, args_count))?;
+                    } else {
+                        self.push_bytecode(ByteCode::GGet(idx))?;
+                    }
+                } else {
+                    return Err(self.error("undefined binding"));
+                }
             }
-        } else {
-            if can_assign && self.check(Token::Equal)? {
-                self.expression()?;
-                self.push_bytecode(ByteCode::LSet(offset as u8))?;
-            } else {
-                self.push_bytecode(ByteCode::LGet(offset as u8))?;
-            }
-        } 
+        };
         Ok(())
     }
 
     fn group(&mut self, _: bool) -> Result<(), CompilerError> {
         self.expression()?;
         self.expect(Token::RightParen, "expected closing ')'")?;
-        Ok(())
-    }
-
-    fn call(&mut self, _: bool) -> Result<(), CompilerError> {
-        let args_count = self.args()?;
-        self.push_bytecode(ByteCode::Call(args_count))?;
         Ok(())
     }
 
@@ -677,10 +689,35 @@ impl Compiler {
         Ok(())
     }
 
+    fn push_global(&mut self) -> Result<(), CompilerError> {
+        if self.globals.len() > GlobalsCount::MAX as usize {
+            return Err(self.error("exceeded maximum number of global bindings."));
+        }
+        dbg!(&self.curr);
+        for global in self.globals.iter() {
+            if global.token.lexm == self.curr.lexm {
+                return Err(self.error("variable identifiers must be unique within the current scope."));
+            }
+        }
+        self.globals.push(Global {
+            token: self.curr.clone(),
+        });
+        Ok(())
+    }
+
+    fn resolve_global(&self, name: &str) -> Option<GlobalsCount> {
+        for (i, global) in self.globals.iter().enumerate() {
+            if global.token.lexm == name {
+                return Some(i as GlobalsCount);
+            }
+        }
+        None
+    }
+
     // requires identifier to be parsed
     fn push_local(&mut self) -> Result<(), CompilerError> {
         if self.locals.len() > LocalsCount::MAX as usize {
-            return Err(self.error("exceeded maximum number of local variable definitions."));
+            return Err(self.error("exceeded maximum number of local bindings."));
         }
         for local in self.locals.iter().rev() {
             if local.scope_depth < self.scope_depth {
@@ -697,14 +734,13 @@ impl Compiler {
         Ok(())
     }
 
-    // REFACTOR
-    fn resolve_local(&self, name: &str) -> i16 { // i16 to cover all [-1; 255]
+    fn resolve_local(&self, name: &str) -> Option<LocalsCount> {
         for (i, local) in self.locals.iter().enumerate().rev() {
             if local.token.lexm == name {
-                return i as i16;
+                return Some(i as LocalsCount);
             }
         }
-        -1
+        None
     }
 
     fn patch_jump(&mut self, idx: usize) -> Result<(), CompilerError> {

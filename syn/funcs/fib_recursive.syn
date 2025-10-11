@@ -7,6 +7,6 @@ func fib(n: Int) -> Int {
 }
 
 func main() {
-	let fib = fib(100);
-	print(fib);
+	let result = fib(30);
+	print(result);
 }

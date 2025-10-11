@@ -1,10 +1,14 @@
 use std::rc::Rc;
-use std::collections::HashMap;
+
+type VMError = String;
+pub type ArgsCount = u8;
+pub type LocalsCount = u8;
+pub type GlobalsCount = u8;
 
 pub struct VM {
     stack: Vec<Constant>,
+    globals: Vec<Constant>,
     call_stack: Vec<CallFrame>,
-    globals: HashMap<String, Var>,
 }
 
 // TODO: work with a reference
@@ -22,7 +26,7 @@ pub struct Func {
     pub arity: usize,
     pub name: String,
     pub chunk: Rc<Chunk>,
-    pub retype: VarType,
+    pub retype: Type,
 }
 
 impl PartialEq for Func {
@@ -34,7 +38,7 @@ impl PartialEq for Func {
 }
 
 impl Func {
-    pub fn new(name: String, arity: usize, retype: VarType, chunk: Chunk) -> Self {
+    pub fn new(name: String, arity: usize, retype: Type, chunk: Chunk) -> Self {
         Self {
             name,
             arity,
@@ -63,13 +67,6 @@ impl Constant {
         }
     }
 
-    fn expect_string(self) -> String {
-        match self {
-            Constant::String(x) => x,
-            _ => panic!("expected string")
-        }
-    }
-
     fn expect_integer(self) -> i32 {
         match self {
             Constant::Integer(x) => x,
@@ -84,32 +81,26 @@ impl Constant {
         }
     }
 
-    fn get_var_type(&self) -> VarType {
+    fn get_var_type(&self) -> Type {
         match self {
-            Constant::Integer(_) => VarType::Integer,
-            Constant::Float(_) => VarType::Float,
-            Constant::Bool(_) => VarType::Bool,
-            Constant::String(_) => VarType::String,
-            Constant::Function(_) => VarType::Function,
-            Constant::Nil => VarType::None,
+            Constant::Integer(_) => Type::Integer,
+            Constant::Float(_) => Type::Float,
+            Constant::Bool(_) => Type::Bool,
+            Constant::String(_) => Type::String,
+            Constant::Function(_) => Type::Function,
+            Constant::Nil => Type::None,
         }
     }
 }
 
 #[derive(Clone, PartialEq, Debug)]
-pub enum VarType {
+pub enum Type {
     Integer,
     Float,
     Bool,
     String,
     Function,
     None 
-}
-
-#[derive(Debug)]
-struct Var {
-    typ: VarType,
-    val: Constant
 }
 
 #[repr(u8)]
@@ -134,15 +125,15 @@ pub enum ByteCode {
     Print,
 
     GDef,
-    GGet,
-    GSet,
+    GGet(GlobalsCount),
+    GSet(GlobalsCount),
+    Call(GlobalsCount, ArgsCount),
     LDef,
-    LGet(u8),
-    LSet(u8),
+    LGet(LocalsCount),
+    LSet(LocalsCount),
 
     Jump(usize),
     JumpIfFalse(usize),
-    Call(u8),
 
     Ret,
 }
@@ -214,7 +205,7 @@ impl VM {
         Self {
             stack: Vec::new(),
             call_stack: Vec::new(),
-            globals: HashMap::new(),
+            globals: Vec::new(),
         }
     }
 
@@ -241,7 +232,7 @@ impl VM {
 
     #[allow(unsafe_op_in_unsafe_fn)]
     pub unsafe fn exec(mut self, prog: Chunk) -> Result<(), VMError> {
-        let mut prog_func = Func::new(String::from("__prog__"), 0, VarType::None, prog);
+        let mut prog_func = Func::new(String::from("__prog__"), 0, Type::None, prog);
         let mut frame = CallFrame {
             ip: 0,
             func: &mut prog_func,
@@ -345,46 +336,52 @@ impl VM {
                 },
                 ByteCode::GDef => {
                     let val = self.pop();
-                    let name = self.pop().expect_string();
-                    self.globals.insert(name.into(), Var {
-                        typ: val.get_var_type(),
-                        val
-                    });
+                    self.globals.push(val);
                 },
-                ByteCode::GGet => {
-                    let name = self.pop().expect_string();
-                    match self.globals.get(&name) {
-                        Some(var) => {
-                            if var.typ == VarType::None {
-                                return Err(format!("can't use unintialized variable"));
-                            }
-                            self.push(var.val.clone());
-                        },
-                        None => return Err(format!("undefined variable"))
-                    };
+                ByteCode::GGet(idx) => {
+                    self.push(self.globals[idx as usize].clone());
+                    // let name = self.pop().expect_string();
+                    // match self.globals.get(&name) {
+                    //     Some(var) => {
+                    //         if var.typ == Type::None {
+                    //             return Err(format!("can't use unintialized variable"));
+                    //         }
+                    //         self.push(var.val.clone());
+                    //     },
+                    //     None => return Err(format!("undefined variable"))
+                    // };
                 }
-                ByteCode::GSet => {
-                    let val = self.pop();
-                    let name = self.pop().expect_string();
-                    match self.globals.get(&name) {
-                        Some(var) => {
-                            // TODO: typechecking on every access is tedious
-                            if val.get_var_type() != var.typ {
-                                return Err(
-                                    format!("mismatched types ({:?} != {:?})",
-                                        val.get_var_type(),
-                                        var.typ
-                                    )
-                                );
-                            }
-                            self.globals.insert(name.into(), Var {
-                                typ: val.get_var_type(),
-                                val: val.clone()
-                            });
-                        },
-                        None => return Err(format!("undefined variable")),
-                    };
-                    self.push(val);
+                ByteCode::GSet(idx) => {
+                    let val = self.peek().clone();
+                    // TODO: move typechecking to compile time
+                    if val.get_var_type() != self.globals[idx as usize].get_var_type() {
+                            return Err(
+                                format!("mismatched types ({:?} != {:?})",
+                                    val.get_var_type(),
+                                    self.stack[idx as usize].get_var_type()
+                                )
+                            );
+                    }
+                    self.globals[idx as usize] = val;
+                    // let name = self.pop().expect_string();
+                    // match self.globals.get(&name) {
+                    //     Some(var) => {
+                    //         if val.get_var_type() != var.typ {
+                    //             return Err(
+                    //                 format!("mismatched types ({:?} != {:?})",
+                    //                     val.get_var_type(),
+                    //                     var.typ
+                    //                 )
+                    //             );
+                    //         }
+                    //         self.globals.insert(name.into(), Var {
+                    //             typ: val.get_var_type(),
+                    //             val: val.clone()
+                    //         });
+                    //     },
+                    //     None => return Err(format!("undefined variable")),
+                    // };
+                    // self.push(val);
                 },
                 ByteCode::LDef => (), // yeah
                 ByteCode::LGet(offset) => self.push(self.stack[frame.stack_offset + offset as usize].clone()),
@@ -408,32 +405,28 @@ impl VM {
                         frame.ip = dest - 1;
                     }
                 },
-                ByteCode::Call(args_c) => {
+                ByteCode::Call(idx, args_c) => {
+                    // TODO: move additional check to typechecker at compile-time
                     let args = (0..args_c).map(|_| self.pop()).collect::<Vec<Constant>>();
-                    let name = self.pop().expect_string();
-                    if let Some(var) = self.globals.get_mut(&name) {
-                         if let Constant::Function(ref mut func) = var.val {
-                             if func.arity != args_c as usize {
-                                 return Err(
-                                     format!("expected {} args got {}", func.arity, args_c)
-                                );
-                             }
-                             let func_ptr = func as *mut Func;
-                             self.push_func(frame.clone());
-                             frame = CallFrame {
-                                 ip: 0,
-                                 func: func_ptr,
-                                 stack_offset: self.stack.len(),
-                             };
-                             for arg in args {
-                                 self.push(arg);
-                             }
-                             continue;
-                         } else {
-                             return Err(format!("can only call a function"));
-                         }
+                    if let Constant::Function(ref mut func) = self.globals[idx as usize] {
+                        if func.arity != args_c as usize {
+                            return Err(
+                                format!("expected {} args got {}", func.arity, args_c)
+                            );
+                        }
+                        let func_ptr = func as *mut Func;
+                        self.push_func(frame.clone());
+                        frame = CallFrame {
+                            ip: 0,
+                            func: func_ptr,
+                            stack_offset: self.stack.len(),
+                        };
+                        for arg in args {
+                            self.push(arg);
+                        }
+                        continue;
                     } else {
-                         return Err(format!("undefined binding '{name}'"));
+                        return Err(format!("invalid call target"));
                     }
                 },
                 ByteCode::Ret => {
@@ -472,5 +465,3 @@ impl std::fmt::Display for Constant {
         }
     }
 }
-
-type VMError = String;

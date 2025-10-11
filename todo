@@ -1,6 +1,3 @@
-- error synchronization when parsing
-- symantic analyzer and type checker
-- avoid allocating new string on each global access
-- add un-initialized state for both global and local variables
-- move typechecking to compile time
-- extend the 256 limit for local variables to be in scope at a time
+- improve global variables by substituting their refrences with indecies at runtime
+- symantic analyzer and type checker at compile-time - add un-initialized state for both globals and locals
+- revisit the limits imposed on (max_locals, max_instructions_in_block, max_params)
