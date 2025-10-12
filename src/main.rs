@@ -41,7 +41,7 @@ fn main() {
         }
         process::exit(69)
     });
-    // prog.disassemble();
+    prog.disassemble();
 
     unsafe {
         VM::new().exec(prog).unwrap_or_else(|err| {

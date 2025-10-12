@@ -1,10 +1,11 @@
 type VMError = String;
-pub type ChunksCount = u8;
-pub type ConstsCount = u8;
-pub type ArgsCount = u8;
-pub type LocalsCount = u8;
-pub type GlobalsCount = u8;
-pub type ChunkSize = usize;
+
+pub type LocalCounter = u8;
+pub type GlobalCounter = u8;
+pub type ArgsCounter = u8;
+pub type FuncCounter = u8;
+pub type ConstCounter = u8;
+pub type InstPtr = usize;
 
 pub struct VM {
     stack: Vec<Constant>,
@@ -23,25 +24,35 @@ impl Program {
         }
     }
 
+    pub fn disassemble(&self) {
+        println!("== PROG_START ==");
+        for chunk in &self.chunks {
+            // println!("func {} ({}) -> {:?}:", func.name, func.arity, func.retype);
+            chunk.disassemble();
+            println!();
+        }
+        println!("== PROG_START ==");
+    }
+
     pub fn get_top_level_chunk(&mut self) -> &mut Chunk {
         &mut self.chunks[0]
     }
 
-    pub fn push(&mut self, c: Chunk) -> Result<ChunksCount, &'static str> {
-        let idx = self.chunks.len() as ChunksCount;
-        if idx == ChunksCount::MAX {
-            Err("exceeded the number of possible functions in a program")
-        } else {
+    pub fn push(&mut self, c: Chunk) -> Result<FuncCounter, &'static str> {
+        let idx = self.chunks.len() as FuncCounter;
+        if idx < FuncCounter::MAX {
             self.chunks.push(c);
             Ok(idx)
+        } else {
+            Err("exceeded the number of possible functions in a program")
         }
     }
 }
 
 #[derive(Clone)]
 pub struct CallFrame {
+    ip: InstPtr,
     func: Func,
-    ip: ChunkSize,
     stack_offset: usize,
 }
 
@@ -50,7 +61,7 @@ pub struct Func {
     pub arity: usize,
     pub name: String,
     pub retype: Type,
-    pub chunk: ChunksCount,
+    pub chunk: FuncCounter,
 }
 
 impl PartialEq for Func {
@@ -99,14 +110,14 @@ impl Constant {
     fn expect_bool(self) -> bool {
         match self {
             Constant::Bool(x) => x,
-            _ => panic!("expected bool"),
+            _ => panic!("expected boolean"),
         }
     }
-
-    fn expect_function(self, msg: &'static str) -> Result<Func, &'static str> {
+    
+    fn expect_func(self, msg: &'static str) -> Result<Func, VMError> {
         match self {
-            Constant::Function(func) => Ok(func),
-            _ => Err(msg),
+            Constant::Function(x) => Ok(x),
+            _ => Err(VMError::from(msg))
         }
     }
 
@@ -128,7 +139,7 @@ impl Constant {
     }
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     Integer,
     Float,
@@ -141,7 +152,7 @@ pub enum Type {
 #[repr(u8)]
 #[derive(Debug, Copy, Clone)]
 pub enum ByteCode {
-    Push(ConstsCount),
+    Push(ConstCounter),
     Pop,
 
     Add,
@@ -157,18 +168,18 @@ pub enum ByteCode {
     Or,
     And,
 
-    Print(ArgsCount),
+    Print(ArgsCounter),
 
     GDef,
-    GGet(GlobalsCount),
-    GSet(GlobalsCount),
+    GGet(GlobalCounter),
+    GSet(GlobalCounter),
     LDef,
-    LGet(LocalsCount),
-    LSet(LocalsCount),
+    LGet(LocalCounter),
+    LSet(LocalCounter),
 
-    Jump(ChunkSize),
-    JumpIfFalse(ChunkSize),
-    Call(ArgsCount),
+    Jump(InstPtr),
+    JumpIfFalse(InstPtr),
+    Call(ArgsCounter),
 
     Ret,
 }
@@ -206,8 +217,8 @@ impl Chunk {
     }
 
     pub fn load_const(&mut self, c: Constant) -> Result<u8, &'static str> {
-        let index = self.consts.len() as ConstsCount;
-        if index > ConstsCount::MAX {
+        let index = self.consts.len() as ConstCounter;
+        if index > ConstCounter::MAX {
             Err("can't define more constants in chunk")
         } else {
             self.push(ByteCode::Push(index));
@@ -217,23 +228,20 @@ impl Chunk {
     }
 
     #[allow(unused)]
-    pub fn disassemble_one(&self, idx: usize) {
-        print!("{:?} :: ", idx);
-        match self.code[idx] {
+    pub fn disassemble_one(&self, ip: InstPtr) {
+        match self.code[ip] {
             ByteCode::Push(i) => {
-                println!("Push {} --> {:?}", i, self.consts[i as usize]);
+                println!("    Push {} --> {}", i, self.consts[i as usize]);
             }
-            byte => println!("{:?}", byte),
+            byte => println!("    {:?}", byte),
         };
     }
 
     #[allow(unused)]
     pub fn disassemble(&self) {
-        println!("=======");
         for i in 0..self.code.len() {
             self.disassemble_one(i);
         }
-        println!("=======");
     }
 }
 
@@ -428,14 +436,17 @@ impl VM {
                 ByteCode::Call(args_c) => {
                     // TODO: move additional check to typechecker at compile-time
                     let args = (0..args_c).map(|_| self.pop()).collect::<Vec<Constant>>();
-                    let func = self.pop().expect_function("invalid call target")?;
+                    let func = match self.pop().expect_func("invalid calling target") {
+                        Ok(idx) => idx,
+                        Err(err) => return Err(VMError::from(err))
+                    };
                     if func.arity != args_c as usize {
                         return Err(format!("expected {} args got {}", func.arity, args_c));
                     }
                     self.push_func(frame.clone());
                     frame = CallFrame {
-                        func,
                         ip: 0,
+                        func,
                         stack_offset: self.stack.len(),
                     };
                     for arg in args {

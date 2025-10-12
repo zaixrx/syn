@@ -1,7 +1,7 @@
 use crate::lexer::{Lexer, Token, TokenHeader};
 
 use crate::vm::{
-    ArgsCount, ByteCode, Chunk, ChunkSize, Constant, Func, GlobalsCount, LocalsCount, Program, Type,
+    ArgsCounter, ByteCode, Chunk, InstPtr, Constant, Func, GlobalCounter, LocalCounter, Program, Type
 };
 
 pub struct Compiler {
@@ -72,7 +72,7 @@ impl Compiler {
             prog: Program::new(),
             globals: Vec::new(),
             curr_chunk: None,
-            locals: Vec::with_capacity(LocalsCount::MAX as usize),
+            locals: Vec::with_capacity(LocalCounter::MAX as usize),
             scope_depth: 0,
             loop_state: LoopState::new(),
 
@@ -365,7 +365,7 @@ impl Compiler {
             .load_const(Constant::Function(func))
         {
             Ok(idx) => idx,
-            Err(msg) => return Err(self.error(msg)),
+            Err(err) => return Err(self.error(err)),
         };
         self.prog.get_top_level_chunk().push(ByteCode::GDef);
         Ok(())
@@ -394,14 +394,9 @@ impl Compiler {
         self.end_scope()?;
         let chunk = match self.prog.push(self.curr_chunk.take().unwrap()) {
             Ok(idx) => idx,
-            Err(msg) => return Err(self.error(msg)),
+            Err(msg) => return Err(self.error(msg))
         };
-        Ok(Func {
-            name,
-            arity,
-            retype,
-            chunk,
-        })
+        Ok(Func { name, arity, retype, chunk, })
     }
 
     fn compile_params(&mut self) -> Result<usize, CompilerError> {
@@ -585,7 +580,7 @@ impl Compiler {
         Ok(())
     }
 
-    fn args(&mut self) -> Result<ArgsCount, CompilerError> {
+    fn args(&mut self) -> Result<ArgsCounter, CompilerError> {
         let mut count = 0;
         loop {
             let curr = self.peek()?.tokn;
@@ -597,7 +592,7 @@ impl Compiler {
                 self.expect(Token::Comma, "expected ',' arg seperator")?;
             }
             self.expression()?;
-            count += if count > ArgsCount::MAX {
+            count += if count > ArgsCounter::MAX {
                 return Err(self.error("exceeded max args limit"));
             } else {
                 1
@@ -698,7 +693,7 @@ impl Compiler {
     }
 
     fn push_global(&mut self) -> Result<(), CompilerError> {
-        if self.globals.len() > GlobalsCount::MAX as usize {
+        if self.globals.len() > GlobalCounter::MAX as usize {
             return Err(self.error("exceeded maximum number of global bindings."));
         }
         for global in self.globals.iter() {
@@ -714,10 +709,10 @@ impl Compiler {
         Ok(())
     }
 
-    fn resolve_global(&self, name: &str) -> Option<GlobalsCount> {
+    fn resolve_global(&self, name: &str) -> Option<GlobalCounter> {
         for (i, global) in self.globals.iter().enumerate() {
             if global.token.lexm == name {
-                return Some(i as GlobalsCount);
+                return Some(i as GlobalCounter);
             }
         }
         None
@@ -725,7 +720,7 @@ impl Compiler {
 
     // requires identifier to be parsed
     fn push_local(&mut self) -> Result<(), CompilerError> {
-        if self.locals.len() > LocalsCount::MAX as usize {
+        if self.locals.len() > LocalCounter::MAX as usize {
             return Err(self.error("exceeded maximum number of local bindings."));
         }
         for local in self.locals.iter().rev() {
@@ -745,21 +740,21 @@ impl Compiler {
         Ok(())
     }
 
-    fn resolve_local(&self, name: &str) -> Option<LocalsCount> {
+    fn resolve_local(&self, name: &str) -> Option<LocalCounter> {
         for (i, local) in self.locals.iter().enumerate().rev() {
             if local.token.lexm == name {
-                return Some(i as LocalsCount);
+                return Some(i as LocalCounter);
             }
         }
         None
     }
 
-    fn patch_jump(&mut self, idx: ChunkSize) -> Result<(), CompilerError> {
+    fn patch_jump(&mut self, idx: InstPtr) -> Result<(), CompilerError> {
         self.set_bytecode(idx, ByteCode::Jump(self.bytecode_count()?))?;
         Ok(())
     }
 
-    fn patch_fjump(&mut self, idx: ChunkSize) -> Result<(), CompilerError> {
+    fn patch_fjump(&mut self, idx: InstPtr) -> Result<(), CompilerError> {
         self.set_bytecode(idx, ByteCode::JumpIfFalse(self.bytecode_count()?))?;
         Ok(())
     }
