@@ -1,12 +1,12 @@
 func main() {
 	{
-    	let a = 100;
-    	{
-    		let b = 200;
-    		print b;
-    	}
-    	let c = 300;
-    	print a;
-    	print c;
+		let a = 100;
+		{
+			let b = 200;
+			print(b);
+		}
+		let c = 300;
+		print(a);
+		print(c);
 	}
 }

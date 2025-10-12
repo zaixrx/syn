@@ -17,6 +17,8 @@ pub struct TokenHeader {
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum Token {
+    LeftBracket,
+    RightBracket,
     LeftParen,
     RightParen,
     LeftBrace,
@@ -178,6 +180,8 @@ impl Lexer {
             }
         };
         let tok = match c {
+            '[' => Token::LeftBracket,
+            ']' => Token::RightBracket,
             '(' => Token::LeftParen,
             ')' => Token::RightParen,
             '{' => Token::LeftBrace,

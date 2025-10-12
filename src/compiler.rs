@@ -1,7 +1,21 @@
-use crate::lexer::{Lexer, Token, TokenHeader};
+use crate::lexer::{
+    Lexer,
+    Token,
+    TokenHeader
+};
 
 use crate::vm::{
-    ArgsCounter, ByteCode, Chunk, InstPtr, Constant, Func, GlobalCounter, LocalCounter, Program, Type
+    Program,
+    ByteCode,
+    Constant,
+    Func,
+    Chunk,
+    Array,
+    Type,
+    InstPtr,
+    ArgsCounter,
+    LocalCounter,
+    GlobalCounter,
 };
 
 pub struct Compiler {
@@ -247,6 +261,11 @@ impl Compiler {
 
     fn get_rule(&self, tok: Token) -> Rule {
         match tok {
+            Token::LeftBracket => Rule {
+                prefix: Some(Compiler::array),
+                infix: Some(Compiler::index),
+                prec: Precedence::Call
+            },
             Token::LeftParen => Rule {
                 prefix: Some(Compiler::group),
                 infix: Some(Compiler::call),
@@ -421,6 +440,7 @@ impl Compiler {
     }
 
     fn compile_type(&mut self) -> Result<Type, CompilerError> {
+        // println!("{:?}", self.peek()?.tokn);
         let typ = match self.peek()?.tokn {
             Token::IntT => Type::Integer,
             Token::FloatT => Type::Float,
@@ -441,7 +461,7 @@ impl Compiler {
         self.push_bytecode(ByteCode::Jump(self.loop_state.start))?;
         self.patch_fjump(loop_cond)?;
         while let Some(jump) = self.loop_state.break_jumps.pop() {
-            self.patch_fjump(jump)?;
+            self.patch_jump(jump)?;
         }
         self.loop_state.end_loop();
         Ok(())
@@ -570,7 +590,34 @@ impl Compiler {
 
     fn group(&mut self, _: bool) -> Result<(), CompilerError> {
         self.expression()?;
-        self.expect(Token::RightParen, "expected closing ')'")?;
+        self.expect(Token::RightParen, "expected enclosing ')'")?;
+        Ok(())
+    }
+
+    fn array(&mut self, _: bool) -> Result<(), CompilerError> {
+        let typ = self.compile_type()?;
+        self.expect(Token::SemiColon, "expected ';' after array type")?;
+        let mut count = 0;
+        while !self.check_with_eof(Token::RightBracket)? {
+            loop {
+                count += 1;
+                self.expression()?;
+                if !self.check(Token::Comma)? {
+                    break;
+                }
+            }
+        }
+        if self.curr.tokn != Token::RightBracket {
+            return Err(self.error("expected disclosing ']'"));
+        }
+        self.push_bytecode(ByteCode::Array(typ, count))?;
+        Ok(())
+    }
+
+    fn index(&mut self, _: bool) -> Result<(), CompilerError> {
+        self.expression()?;
+        self.expect(Token::RightBracket, "expected enclosing ']'")?;
+        self.push_bytecode(ByteCode::Index)?;
         Ok(())
     }
 
@@ -786,9 +833,19 @@ impl Compiler {
         }
     }
 
-    fn check(&mut self, what: Token) -> Result<bool, CompilerError> {
+    fn check_with_eof(&mut self, what: Token) -> Result<bool, CompilerError> {
         let tokn = self.peek()?.tokn;
         Ok(if tokn == Token::EOF || tokn == what {
+            self.next()?;
+            true
+        } else {
+            false
+        })
+    }
+
+    fn check(&mut self, what: Token) -> Result<bool, CompilerError> {
+        let tokn = self.peek()?.tokn;
+        Ok(if tokn == what {
             self.next()?;
             true
         } else {

@@ -1,0 +1,10 @@
+func return_5() {
+	return 5;
+}
+
+let a = return_5();
+let b = a + 1;
+
+func main() {
+	print(b);
+}

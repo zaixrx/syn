@@ -29,4 +29,4 @@ lookup() {
 	success_out "All the tests passed successfully"
 }
 
-lookup "./syn"
+lookup "./examples"

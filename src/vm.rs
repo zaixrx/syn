@@ -1,5 +1,4 @@
 type VMError = String;
-
 pub type LocalCounter = u8;
 pub type GlobalCounter = u8;
 pub type ArgsCounter = u8;
@@ -56,6 +55,24 @@ pub struct CallFrame {
     stack_offset: usize,
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct Array {
+    pub typ: Type,
+    pub items: Vec<Constant>,
+}
+
+impl PartialEq for Array {
+    fn eq(&self, other: &Self) -> bool {
+        for i in 0..other.items.len() {
+            if self.items[i] != other.items[i] {
+                return false;
+            }
+        }
+        return true;
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Func {
     pub arity: usize,
@@ -88,6 +105,7 @@ pub enum Constant {
     Float(f64),
     Bool(bool),
     String(String),
+    Array(Array),
     Function(Func),
     Nil,
 }
@@ -100,23 +118,30 @@ impl Constant {
         }
     }
 
-    fn expect_integer(self) -> i32 {
+    fn expect_integer(self, msg: &'static str) -> Result<i32, &'static str> {
         match self {
-            Constant::Integer(x) => x,
-            _ => panic!("expected integer"),
+            Constant::Integer(x) => Ok(x),
+            _ => Err(msg),
         }
     }
 
-    fn expect_bool(self) -> bool {
+    fn expect_bool(self, msg: &'static str) -> Result<bool, &'static str> {
         match self {
-            Constant::Bool(x) => x,
-            _ => panic!("expected boolean"),
+            Constant::Bool(x) => Ok(x),
+            _ => Err(msg),
         }
     }
     
     fn expect_func(self, msg: &'static str) -> Result<Func, VMError> {
         match self {
             Constant::Function(x) => Ok(x),
+            _ => Err(VMError::from(msg))
+        }
+    }
+
+    fn expect_array(self, msg: &'static str) -> Result<Array, VMError> {
+        match self {
+            Constant::Array(x) => Ok(x),
             _ => Err(VMError::from(msg))
         }
     }
@@ -128,6 +153,7 @@ impl Constant {
             Constant::Bool(_) => Type::Bool,
             Constant::String(_) => Type::String,
             Constant::Function(_) => Type::Function,
+            Constant::Array(_) => Type::Array,
             Constant::Nil => Type::None,
         }
     }
@@ -139,13 +165,14 @@ impl Constant {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Type {
     Integer,
     Float,
     Bool,
     String,
     Function,
+    Array,
     None,
 }
 
@@ -180,6 +207,9 @@ pub enum ByteCode {
     Jump(InstPtr),
     JumpIfFalse(InstPtr),
     Call(ArgsCounter),
+
+    Array(Type, usize),
+    Index,
 
     Ret,
 }
@@ -229,11 +259,12 @@ impl Chunk {
 
     #[allow(unused)]
     pub fn disassemble_one(&self, ip: InstPtr) {
+        print!("{:0>4}", ip);
         match self.code[ip] {
             ByteCode::Push(i) => {
-                println!("    Push {} --> {}", i, self.consts[i as usize]);
+                println!("  Push {} --> {}", i, self.consts[i as usize]);
             }
-            byte => println!("    {:?}", byte),
+            byte => println!("  {:?}", byte),
         };
     }
 
@@ -243,6 +274,15 @@ impl Chunk {
             self.disassemble_one(i);
         }
     }
+}
+
+macro_rules! err {
+    ($x: expr) => {
+        match $x {
+            Ok(idx) => idx,
+            Err(msg) => return Err(VMError::from(msg))
+        }
+    };
 }
 
 impl VM {
@@ -283,8 +323,8 @@ impl VM {
             func: Func::new(),
         };
         while frame.ip < prog.chunks[frame.func.chunk as usize].count() {
-            // chunk.disassemble_one(frame.ip);
             let chunk = &prog.chunks[frame.func.chunk as usize];
+            // chunk.disassemble_one(frame.ip);
             let byte = chunk.code[frame.ip];
             match byte {
                 ByteCode::Push(i) => {
@@ -367,12 +407,12 @@ impl VM {
                     println!("{}", buffer);
                 }
                 ByteCode::Neg => {
-                    let x = self.pop().expect_integer();
+                    let x = err!(self.pop().expect_integer("operand is required to be an integer"));
                     self.push(Constant::Integer(-x))
                 }
                 ByteCode::Or | ByteCode::And => {
-                    let y = self.pop().expect_bool();
-                    let x = self.pop().expect_bool();
+                    let y = err!(self.pop().expect_bool("left operand is required to be a boolean"));
+                    let x = err!(self.pop().expect_bool("right operand is require to be a boolean"));
                     self.push(match byte {
                         ByteCode::Or => Constant::Bool(x || y),
                         ByteCode::And => Constant::Bool(x && y),
@@ -385,7 +425,7 @@ impl VM {
                     self.push(Constant::Bool(x == y));
                 }
                 ByteCode::Not => {
-                    let b = self.pop().expect_bool();
+                    let b = err!(self.pop().expect_bool("operand expected to be a boolean"));
                     self.push(Constant::Bool(!b));
                 }
                 ByteCode::Pop => {
@@ -454,7 +494,28 @@ impl VM {
                     }
                     continue;
                 }
-                ByteCode::Ret => {
+                ByteCode::Array(typ, count) => {
+                    let mut items = vec![Constant::Nil; count];
+                    for i in 0..count {
+                        let val = self.pop();
+                        if val.get_var_type() != typ {
+                            return Err(
+                                format!("invalid type {:?}", val.get_var_type())
+                            );
+                        }
+                        items[count - (i + 1)] = val;
+                    }
+                    self.push(Constant::Array(Array { typ, items }));
+                }
+                ByteCode::Index => {
+                    let idx = err!(self.pop().expect_integer("invalid array index")) as usize;
+                    let arr = err!(self.pop().expect_array("you can only index arrays"));
+                    if 0 < idx && idx < arr.items.len() {
+                        return Err(VMError::from("index out of bounds"));
+                    }
+                    self.push(arr.items[idx].clone());
+                }
+                ByteCode::Ret => { // don't `continue;`
                     let val = self.pop();
                     while self.stack.len() > frame.stack_offset {
                         self.pop();
@@ -486,6 +547,17 @@ impl std::fmt::Display for Constant {
             Constant::Bool(val) => write!(f, "{}", val),
             Constant::String(val) => write!(f, "{}", val),
             Constant::Function(val) => write!(f, "Func<{}>", val.name),
+            Constant::Array(val) => {
+                write!(f, "[")?;
+                for i in 0..val.items.len() {
+                    if i + 1 < val.items.len() {
+                        write!(f, "{}, ", val.items[i])?;
+                    } else {
+                        write!(f, "{}", val.items[i])?;
+                    }
+                }
+                write!(f, "]")
+            },
             Constant::Nil => write!(f, "nil"),
         }
     }
