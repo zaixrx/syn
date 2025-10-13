@@ -1,4 +1,8 @@
 func main() {
-	let arr = [Int; 1, 2, 3];
-	print(arr);
+	let arr = [Int; 69, 420, 705];
+	let i = 0;
+	while i < 3 {
+		print("arr[", i, "] =", arr[i]);
+		i = i + 1;
+	}
 }

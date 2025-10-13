@@ -508,12 +508,12 @@ impl VM {
                     self.push(Constant::Array(Array { typ, items }));
                 }
                 ByteCode::Index => {
-                    let idx = err!(self.pop().expect_integer("invalid array index")) as usize;
+                    let idx = err!(self.pop().expect_integer("invalid array index"));
                     let arr = err!(self.pop().expect_array("you can only index arrays"));
-                    if 0 < idx && idx < arr.items.len() {
+                    if !(0 <= idx && (idx as usize) < arr.items.len()) {
                         return Err(VMError::from("index out of bounds"));
                     }
-                    self.push(arr.items[idx].clone());
+                    self.push(arr.items[idx as usize].clone());
                 }
                 ByteCode::Ret => { // don't `continue;`
                     let val = self.pop();
