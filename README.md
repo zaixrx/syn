@@ -4,13 +4,14 @@ programming language that runs on a stack-based synVM with it's own runtime
 providing (hopefully) garabage collection and JIT compilation
 
 ```
+// syn is statically typed
 func fib(n: Float) -> Float {
-    if n <= 1 {
-        return 1;
+    if n <= 1.0 {
+        return 1.0;
     }
     let a = 1.0;
     let b = 1.0;
-    while n > 0 {
+    while n > 0.0 {
         a = a + b;
         b = a - b;
         n = n - 1;
@@ -18,13 +19,14 @@ func fib(n: Float) -> Float {
     return a; 
 } 
 
+// functions are first class
 func get_fib() -> Func { 
     return fib; 
 }
 
 func main() {
-    let target = 123;
-    print("get_fib()(", target, ") =", get_fib()(target));
+    let x = 123.0;
+    print("get_fib()({}) = {}, target, get_fib()(target));
 }
 ```
 

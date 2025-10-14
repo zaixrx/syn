@@ -6,6 +6,6 @@ let a = return_5();
 let b = a * 2;
 
 func main() {
-    print("a:", a);
-    print("b:", b);
+    println("a: {}", a);
+    println("b: {}", b);
 }

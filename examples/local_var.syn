@@ -3,10 +3,10 @@ func main() {
 		let a = 100;
 		{
 			let b = 200;
-			print(b);
+			println("{}", b);
 		}
 		let c = 300;
-		print(a);
-		print(c);
+		println("{}", a);
+		println("{}", c);
 	}
 }

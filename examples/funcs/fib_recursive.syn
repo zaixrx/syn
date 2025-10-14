@@ -7,5 +7,5 @@ func fib(n: Int) -> Int {
 
 func main() {
 	let result = fib(20);
-	print(result);
+	println("{}", result);
 }

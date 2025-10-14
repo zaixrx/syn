@@ -127,12 +127,14 @@ impl Lexer {
     }
 
     fn consume_string(&mut self) -> Result<(), LexerError> {
-        match self.src[self.curr + 1..].find('"') {
+        match self.src[self.curr+1..].find('"') {
             Some(end) => {
                 self.curr += end + 2;
                 Ok(())
             }
-            None => Err(LexerError::new("expected trailing \"", &self)),
+            None => {
+                Err(LexerError::new("expected trailing \"", &self))
+            },
         }
     }
 
@@ -263,7 +265,13 @@ impl Lexer {
             '"' => {
                 self.curr -= 1;
                 self.consume_string()?;
-                Token::String
+                // strings are special
+                return Ok(TokenHeader {
+                    tokn: Token::String,
+                    coln: self.start - self.line_start+1,
+                    line: self.line,
+                    lexm: String::from(&self.src[self.start+1..self.curr-1]),
+                });
             }
             c if c.is_ascii_alphabetic() => {
                 self.curr -= 1;

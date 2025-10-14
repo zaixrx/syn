@@ -6,27 +6,21 @@ use vm::VM;
 use compiler::Compiler;
 
 use std::fs;
-use std::env;
 use std::process;
 
+use clap::Parser;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
 struct Args {
     filepath: String,
-}
 
-fn read_args(mut args: impl Iterator<Item = String>) -> Result<Args, &'static str> {
-    args.next(); // ignore exectuable
-    let filepath = match args.next() {
-        Some(s) => s,
-        None => return Err("Expected \"filepath\" found none")
-    };
-    Ok(Args { filepath })
+    #[arg(short, long, default_value="false")]
+    bytecode: bool
 }
 
 fn main() {
-    let args = read_args(env::args()).unwrap_or_else(|err| {
-        eprintln!("ArgsParser failed: {}", err);
-        process::exit(69)
-    });
+    let args = Args::parse();
 
     let src = fs::read_to_string(&args.filepath).unwrap_or_else(|err| {
         eprintln!("Lexer failed: {}", err);
@@ -41,12 +35,13 @@ fn main() {
         }
         process::exit(69)
     });
-    prog.disassemble();
 
-    unsafe {
-        VM::new().exec(prog).unwrap_or_else(|err| {
-            eprintln!("VM failed: {}", err);
-            process::exit(69)
-        });
+    if args.bytecode {
+        prog.disassemble();
     }
+
+    VM::new().exec(prog).unwrap_or_else(|err| {
+        eprintln!("VM failed: {}", err);
+        process::exit(69)
+    });
 }

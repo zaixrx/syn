@@ -1,8 +1,7 @@
-
-func printMessage(message: Str) {
-	print(message);
+func print_string(message: Str) {
+	println("{}", message);
 }
 
 func main() {
-	printMessage("hello world");
+	print_string("hello world");
 }

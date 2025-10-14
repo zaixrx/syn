@@ -439,7 +439,6 @@ impl Compiler {
     }
 
     fn compile_type(&mut self) -> Result<Type, CompilerError> {
-        // println!("{:?}", self.peek()?.tokn);
         let typ = match self.peek()?.tokn {
             Token::IntT => Type::Integer,
             Token::FloatT => Type::Float,
@@ -590,7 +589,9 @@ impl Compiler {
                 break;
             }
             self.expect(Token::Comma, "expected ',' arg seperator")?;
-            self.expression()?; params_count += 1; count += 1;
+            self.expression()?;
+            params_count += 1;
+            count += 1;
         }
         self.expect(Token::RightParen, "expected enclosing ')'")?;
         Ok(count)
@@ -887,10 +888,15 @@ impl Compiler {
     }
 
     fn expect(&mut self, what: Token, msg: &'static str) -> Result<(), CompilerError> {
-        match self.peek()? {
-            t if t.tokn == what => self.next(),
-            t => Err(CompilerError::new(t.line, t.coln, msg, t.lexm)),
+        self.next()?;
+        if self.curr.tokn != what {
+            return Err(
+                CompilerError::new(
+                    self.curr.line, self.curr.coln, msg, self.curr.lexm.clone()
+                )
+            );
         }
+        Ok(())
     }
 
     fn check_with_eof(&mut self, what: Token) -> Result<bool, CompilerError> {

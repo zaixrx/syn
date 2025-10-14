@@ -326,7 +326,7 @@ impl VM {
     }
 
     #[allow(unsafe_op_in_unsafe_fn)]
-    pub unsafe fn exec(mut self, prog: Program) -> Result<(), VMError> {
+    pub fn exec(mut self, prog: Program) -> Result<(), VMError> {
         let mut frame = CallFrame {
             ip: 0,
             stack_offset: 0,

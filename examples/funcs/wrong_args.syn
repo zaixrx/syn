@@ -1,9 +1,9 @@
-func printMessageStr(msg: Str) {
-	print(msg);
+func print_message_str(msg: Str) {
+	println("{}", msg);
 }
 
 func main() {
-	printMessageStr(1);
-	// printMessageStr();
-	// printMessageStr("Hello, World!", 1);
+	print_message_str(1);
+	// print_message_str();
+	// print_message_str("Hello, World!", 1);
 }
