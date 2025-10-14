@@ -1,8 +1,12 @@
 func main() {
-	let arr = [Int; 69, 420, 705];
+	let arr = [
+		69,
+		420,
+		705
+	];
 	let i = 0;
 	while i < 3 {
-		print("arr[", i, "] =", arr[i]);
+		println("arr[{}] = {}", i, arr[i]);
 		i = i + 1;
 	}
 }

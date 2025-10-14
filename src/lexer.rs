@@ -270,7 +270,7 @@ impl Lexer {
                 self.consume_id();
                 match &self.src[self.start..self.curr] {
                     "let" => Token::Let,
-                    "print" => Token::Print,
+                    "println" => Token::Print,
                     "false" => Token::Bool(false),
                     "true" => Token::Bool(true),
                     "nil" => Token::Nil,

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 type VMError = String;
 pub type LocalCounter = u8;
 pub type GlobalCounter = u8;
@@ -46,6 +48,12 @@ impl Program {
             Err("exceeded the number of possible functions in a program")
         }
     }
+}
+
+#[allow(dead_code)]
+struct Struct {
+    name: String,
+    fields: HashMap<String, Type>
 }
 
 #[derive(Clone)]
@@ -165,7 +173,8 @@ impl Constant {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     Integer,
     Float,
@@ -173,6 +182,7 @@ pub enum Type {
     String,
     Function,
     Array,
+    Struct(String),
     None,
 }
 
@@ -208,7 +218,7 @@ pub enum ByteCode {
     JumpIfFalse(InstPtr),
     Call(ArgsCounter),
 
-    Array(Type, usize),
+    Array(usize),
     Index,
 
     Ret,
@@ -402,7 +412,7 @@ impl VM {
                     // TODO: utterly slow
                     let mut buffer = String::new();
                     for _ in 0..count {
-                        buffer = format!("{} {}", self.pop(), buffer);
+                        buffer = format!("{}{}", self.pop(), buffer);
                     }
                     println!("{}", buffer);
                 }
@@ -494,14 +504,19 @@ impl VM {
                     }
                     continue;
                 }
-                ByteCode::Array(typ, count) => {
+                ByteCode::Array(count) => {
+                    let mut typ = Type::None;
                     let mut items = vec![Constant::Nil; count];
                     for i in 0..count {
                         let val = self.pop();
-                        if val.get_var_type() != typ {
-                            return Err(
-                                format!("invalid type {:?}", val.get_var_type())
-                            );
+                        if i == 0 {
+                            typ = val.get_var_type();
+                        } else {
+                            if typ != val.get_var_type() {
+                                return Err(
+                                    format!("invalid type {:?}", val.get_var_type())
+                                );
+                            }
                         }
                         items[count - (i + 1)] = val;
                     }

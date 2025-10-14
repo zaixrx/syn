@@ -1,2 +1,5 @@
+- make the VM stack of usizes that point to data in the chunk's constant table
+- give fixed width to the possibly non dynamic data-structures
+
 - symantic analyzer and type checker at compile-time - add un-initialized state for both globals and locals
 - revisit the limits imposed on (max_locals, max_instructions_in_block, max_params)

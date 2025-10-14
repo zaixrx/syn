@@ -10,7 +10,6 @@ use crate::vm::{
     Constant,
     Func,
     Chunk,
-    Array,
     Type,
     InstPtr,
     ArgsCounter,
@@ -536,9 +535,75 @@ impl Compiler {
         Ok(())
     }
 
+    fn args_format(&mut self, format: &str) -> Result<ArgsCounter, CompilerError> {  
+        let mut offset = 0;
+        let mut next_sub_str = |buf: &mut String| -> Result<bool, &'static str> {
+            let mut start = None;
+            let s = &format[offset..];
+            for (i, c) in s.bytes().enumerate() {
+                match c as char {
+                    '{' => {
+                        if start.is_some() {
+                            return Err("can't have nested templates");
+                        }
+                        start = Some(i+1);
+                    },
+                    '}' => {
+                        match start {
+                            Some(j) => {
+                                if j != i {
+                                    return Err("can't(yet) have something inside {}");
+                                }
+                                offset += i+1;
+                                *buf = String::from(&s[..i-1]);
+                                return Ok(false);
+                            },
+                            None => {
+                                return Err("no corresponding '{'");
+                            }
+                        };
+                    }
+                    _ => ()
+                };
+            }
+            if start.is_some() {
+                Err("no corresponding '}'")
+            } else {
+                *buf = String::from(s);
+                Ok(true)
+            }
+        };
+        let mut count = 0;
+        let mut params_count = 1;
+        loop {
+            if params_count == ArgsCounter::MAX {
+                return Err(self.error("exceeded max args limit"));
+            }
+            let mut buf = String::new();
+            let is_end = match next_sub_str(&mut buf) {
+                Ok(is_end) => is_end,
+                Err(msg) => return Err(self.error(msg))
+            };
+            self.load_const(Constant::String(buf))?;
+            count += 1;
+            if is_end {
+                break;
+            }
+            self.expect(Token::Comma, "expected ',' arg seperator")?;
+            self.expression()?; params_count += 1; count += 1;
+        }
+        self.expect(Token::RightParen, "expected enclosing ')'")?;
+        Ok(count)
+    }
+
+    fn compile_format(&mut self) -> Result<ArgsCounter, CompilerError> {
+        self.expect(Token::String, "expected format string")?; 
+        self.args_format(self.curr.lexm.clone().as_str())
+    }
+
     fn compile_print(&mut self) -> Result<(), CompilerError> {
         self.expect(Token::LeftParen, "expected disclosing '('")?;
-        let count = self.args()?;
+        let count = self.compile_format()?;
         self.expect(Token::SemiColon, "expected ';' after statement")?;
         self.push_bytecode(ByteCode::Print(count))?;
         Ok(())
@@ -595,8 +660,6 @@ impl Compiler {
     }
 
     fn array(&mut self, _: bool) -> Result<(), CompilerError> {
-        let typ = self.compile_type()?;
-        self.expect(Token::SemiColon, "expected ';' after array type")?;
         let mut count = 0;
         while !self.check_with_eof(Token::RightBracket)? {
             loop {
@@ -610,7 +673,7 @@ impl Compiler {
         if self.curr.tokn != Token::RightBracket {
             return Err(self.error("expected disclosing ']'"));
         }
-        self.push_bytecode(ByteCode::Array(typ, count))?;
+        self.push_bytecode(ByteCode::Array(count))?;
         Ok(())
     }
 
@@ -629,22 +692,19 @@ impl Compiler {
 
     fn args(&mut self) -> Result<ArgsCounter, CompilerError> {
         let mut count = 0;
-        loop {
-            let curr = self.peek()?.tokn;
-            if curr == Token::RightParen || curr == Token::EOF {
-                self.expect(Token::RightParen, "expected enclosing ')'")?;
-                return Ok(count);
+        if !self.check(Token::RightParen)? {
+            loop {
+                if count == ArgsCounter::MAX {
+                    return Err(self.error("exceeded max args limit"));
+                }
+                self.expression()?; count += 1;
+                if !self.check(Token::Comma)? {
+                    break;
+                }
             }
-            if count > 0 {
-                self.expect(Token::Comma, "expected ',' arg seperator")?;
-            }
-            self.expression()?;
-            count += if count > ArgsCounter::MAX {
-                return Err(self.error("exceeded max args limit"));
-            } else {
-                1
-            };
+            self.expect(Token::RightParen, "expected enclosing ')'")?;
         }
+        Ok(count)
     }
 
     fn unary(&mut self, _: bool) -> Result<(), CompilerError> {
