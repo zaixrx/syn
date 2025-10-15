@@ -15,6 +15,7 @@ use crate::vm::{
     ArgsCounter,
     LocalCounter,
     GlobalCounter,
+    FuncCounter
 };
 
 pub struct Compiler {
@@ -22,8 +23,9 @@ pub struct Compiler {
     curr: TokenHeader,
 
     prog: Program,
+    curr_func: Option<FuncCounter>,
+
     globals: Vec<Global>,
-    curr_chunk: Option<Chunk>,
     locals: Vec<Local>,
     scope_depth: usize,
     loop_state: LoopState,
@@ -83,8 +85,9 @@ impl Compiler {
             },
 
             prog: Program::new(),
+            curr_func: None,
+
             globals: Vec::new(),
-            curr_chunk: None,
             locals: Vec::with_capacity(LocalCounter::MAX as usize),
             scope_depth: 0,
             loop_state: LoopState::new(),
@@ -371,7 +374,7 @@ impl Compiler {
     }
 
     fn compile_func(&mut self) -> Result<(), CompilerError> {
-        if self.curr_chunk.is_some() {
+        if self.curr_func.is_some() {
             return Err(self.error("can't have nested functions"));
         }
         self.expect(Token::Identifer, "expected the function's name")?;
@@ -390,7 +393,7 @@ impl Compiler {
     }
 
     fn compile_func_body(&mut self, name: String) -> Result<Func, CompilerError> {
-        self.curr_chunk = Some(Chunk::new());
+        self.curr_func = Some(Chunk::new());
         self.start_scope();
         let arity = self.compile_params()?;
         let retype = if self.check(Token::RightArrow)? {
@@ -410,7 +413,7 @@ impl Compiler {
         self.load_const(Object::Nil)?;
         self.push_bytecode(ByteCode::Ret)?;
         self.end_scope()?;
-        let chunk = match self.prog.push(self.curr_chunk.take().unwrap()) {
+        let chunk = match self.prog.push(self.curr_func.take().unwrap()) {
             Ok(idx) => idx,
             Err(msg) => return Err(self.error(msg))
         };
@@ -527,7 +530,7 @@ impl Compiler {
             self.load_const(Object::Nil)?;
         }
         self.expect(Token::SemiColon, "expected ';' after statement")?;
-        if self.curr_chunk.is_none() {
+        if self.curr_func.is_none() {
             return Err(self.error("'return' can only be used inside a function"));
         }
         self.push_bytecode(ByteCode::Ret)?;
@@ -754,7 +757,7 @@ impl Compiler {
 impl Compiler {
     #[inline]
     fn get_chunk(&mut self) -> Result<&mut Chunk, CompilerError> {
-        match self.curr_chunk {
+        match self.curr_func {
             Some(ref mut chunk) => Ok(chunk),
             None if self.declarative_mode => Ok(self.prog.get_top_level_chunk()),
             _ => Err(self.error("non-declarative statements must be wrapped within functions")),
@@ -778,7 +781,7 @@ impl Compiler {
 
     #[inline]
     fn bytecode_count(&self) -> Result<usize, CompilerError> {
-        Ok(self.curr_chunk.as_ref().unwrap().count())
+        Ok(self.curr_func.as_ref().unwrap().count())
     }
 
     #[inline]

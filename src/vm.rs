@@ -1,19 +1,7 @@
-use std::collections::HashMap;
-
-type VMError = String;
-pub type LocalCounter = u8;
-pub type GlobalCounter = u8;
-pub type ArgsCounter = u8;
-pub type FuncCounter = u8;
-pub type ObjCounter = u8;
-pub type ObjPointer = (FuncCounter, ObjCounter);
-pub type InstPtr = usize;
-
 pub struct VM {
     globals: Vec<ObjPointer>,
     stack: Vec<ObjPointer>,
-    call_stack: Vec<CallFrame>,
-    obj: Vec<Object>
+    call_stack: Vec<CallFrame>
 }
 
 pub struct Program {
@@ -29,8 +17,8 @@ impl Program {
 
     pub fn disassemble(&self) {
         println!("== PROG_START ==");
-        for chunk in &self.chunks {
-            chunk.disassemble();
+        for fc in 0..self.chunks.len() {
+            self.chunk_disassemble(fc as FuncCounter);
             println!();
         }
         println!("== PROG_START ==");
@@ -49,62 +37,108 @@ impl Program {
             Err("exceeded the number of possible functions in a program")
         }
     }
-}
 
-#[allow(dead_code)]
-struct Struct {
-    name: String,
-    fields: HashMap<String, Type>
-}
-
-#[derive(Clone)]
-pub struct CallFrame {
-    ip: InstPtr,
-    func: Func,
-    stack_offset: usize,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub struct Array {
-    pub typ: Type,
-    pub items: Vec<ObjPointer>,
-}
-
-impl PartialEq for Array {
-    fn eq(&self, other: &Self) -> bool {
-        for i in 0..other.items.len() {
-            if self.items[i] != other.items[i] {
-                return false;
-            }
+    pub fn chunk_load_const(&mut self, fc: FuncCounter, obj: Object) -> Result<ObjCounter, &'static str> {
+        let chunk = &mut self.chunks[fc as usize];
+        let oc = chunk.objs.len() as ObjCounter;
+        if oc >= ObjCounter::MAX {
+            Err("can't define more constants in chunk")
+        } else {
+            chunk.objs.push(obj);
+            chunk.push(ByteCode::Push((fc, oc)));
+            Ok(oc)
         }
-        return true;
+    }
+
+    #[allow(unused)]
+    pub fn chunk_disassemble_one(&self, fc: FuncCounter, ip: InstPtr) {
+        print!("{:0>4}", ip);
+        match self.chunks[fc as usize].code[ip] {
+            ByteCode::Push(i) => {
+                println!("  Push {} --> {:?}", i.1, self.chunks[i.0 as usize].objs[i.1 as usize]);
+            }
+            byte => println!("  {:?}", byte),
+        };
+    }
+
+    #[allow(unused)]
+    pub fn chunk_disassemble(&self, fc: FuncCounter) {
+        for ip in 0..self.chunks[fc as usize].code.len() {
+            self.chunk_disassemble_one(fc, ip);
+        }
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Func {
-    pub arity: usize,
-    pub name: String,
-    pub retype: Type,
-    pub chunk: FuncCounter,
+#[derive(Clone, Debug)]
+pub struct Chunk {
+    code: Vec<ByteCode>,
+    objs: Vec<Object>,
 }
 
-impl PartialEq for Func {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name && self.arity == other.arity && self.retype == other.retype
-    }
-}
-
-impl Func {
+impl Chunk {
     pub fn new() -> Self {
         Self {
-            arity: 0,
-            chunk: 0,
-            retype: Type::None,
-            name: String::new(),
+            objs: Vec::new(),
+            code: Vec::new(),
         }
     }
+
+    pub fn count(&self) -> usize {
+        self.code.len()
+    }
+
+    pub fn push(&mut self, b: ByteCode) -> usize {
+        self.code.push(b);
+        self.code.len() - 1
+    }
+
+    pub fn pushs(&mut self, b1: ByteCode, b2: ByteCode) -> usize {
+        self.push(b1);
+        self.push(b2)
+    }
+
+    pub fn set(&mut self, idx: usize, b: ByteCode) {
+        self.code[idx] = b;
+    }
+}
+
+#[repr(u8)]
+#[derive(Debug, Copy, Clone)]
+pub enum ByteCode {
+    Push(ObjPointer),
+    Pop,
+
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Neg,
+
+    Not,
+    Equal,
+    Less,
+    Greater,
+    Or,
+    And,
+
+    Print(ArgsCounter),
+
+    GDef,
+    GGet(GlobalCounter),
+    GSet(GlobalCounter),
+    LDef,
+    LGet(LocalCounter),
+    LSet(LocalCounter),
+
+    Jump(InstPtr),
+    JumpIfFalse(InstPtr),
+    Call(ArgsCounter),
+
+    Array(usize),
+    ArrayGet,
+    ArraySet,
+
+    Ret,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -158,7 +192,7 @@ impl Object {
         t1 == t2 || t1 == Type::None || t2 == Type::None
     }
 
-    fn to_string(&self, chunk: &Chunk) -> String {
+    fn to_string(&self, prog: &Program) -> String {
         match self {
             Object::Integer(val) => {
                 format!("{}", val)
@@ -178,7 +212,8 @@ impl Object {
             Object::Array(val) => {
                 let mut s = String::from("[");
                 for i in 0..val.items.len() {
-                    let obj_str = chunk.objs[val.items[i].1 as usize].to_string(chunk);
+                    let ptr = val.items[i];
+                    let obj_str = prog.chunks[ptr.0 as usize].objs[val.items[i].1 as usize].to_string(prog);
                     if i+1 < val.items.len() {
                         s = format!("{}{}, ", s, obj_str);
                     } else {
@@ -194,6 +229,56 @@ impl Object {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct Func {
+    pub arity: usize,
+    pub name: String,
+    pub retype: Type,
+    pub chunk: FuncCounter,
+}
+
+impl PartialEq for Func {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.arity == other.arity && self.retype == other.retype
+    }
+}
+
+impl Func {
+    pub fn new() -> Self {
+        Self {
+            arity: 0,
+            chunk: 0,
+            retype: Type::None,
+            name: String::new(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct CallFrame {
+    ip: InstPtr,
+    func: Func,
+    stack_offset: usize,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct Array {
+    pub typ: Type,
+    pub items: Vec<ObjPointer>,
+}
+
+impl PartialEq for Array {
+    fn eq(&self, other: &Self) -> bool {
+        for i in 0..other.items.len() {
+            if self.items[i] != other.items[i] {
+                return false;
+            }
+        }
+        return true;
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
@@ -205,107 +290,6 @@ pub enum Type {
     Array,
     Struct(String),
     None,
-}
-
-#[repr(u8)]
-#[derive(Debug, Copy, Clone)]
-pub enum ByteCode {
-    Push(ObjPointer),
-    Pop,
-
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Neg,
-
-    Not,
-    Equal,
-    Less,
-    Greater,
-    Or,
-    And,
-
-    Print(ArgsCounter),
-
-    GDef,
-    GGet(GlobalCounter),
-    GSet(GlobalCounter),
-    LDef,
-    LGet(LocalCounter),
-    LSet(LocalCounter),
-
-    Jump(InstPtr),
-    JumpIfFalse(InstPtr),
-    Call(ArgsCounter),
-
-    Array(usize),
-    ArrayGet,
-    ArraySet,
-
-    Ret,
-}
-
-#[derive(Clone, Debug)]
-pub struct Chunk {
-    code: Vec<ByteCode>,
-    objs: Vec<Object>,
-}
-
-impl Chunk {
-    pub fn new() -> Self {
-        Self {
-            objs: Vec::new(),
-            code: Vec::new(),
-        }
-    }
-
-    pub fn count(&self) -> usize {
-        self.code.len()
-    }
-
-    pub fn push(&mut self, b: ByteCode) -> usize {
-        self.code.push(b);
-        self.code.len() - 1
-    }
-
-    pub fn pushs(&mut self, b1: ByteCode, b2: ByteCode) -> usize {
-        self.push(b1);
-        self.push(b2)
-    }
-
-    pub fn set(&mut self, idx: usize, b: ByteCode) {
-        self.code[idx] = b;
-    }
-
-    pub fn load_const(&mut self, obj: Object) -> Result<u8, &'static str> {
-        let index = self.objs.len();
-        if index >= ObjCounter::MAX as usize {
-            Err("can't define more constants in chunk")
-        } else {
-            self.objs.push(obj);
-            self.push(ByteCode::Push(index));
-            Ok(index)
-        }
-    }
-
-    #[allow(unused)]
-    pub fn disassemble_one(&self, ip: InstPtr) {
-        print!("{:0>4}", ip);
-        match self.code[ip] {
-            ByteCode::Push(i) => {
-                println!("  Push {} --> {:?}", i, self.objs[i as usize]);
-            }
-            byte => println!("  {:?}", byte),
-        };
-    }
-
-    #[allow(unused)]
-    pub fn disassemble(&self) {
-        for i in 0..self.code.len() {
-            self.disassemble_one(i);
-        }
-    }
 }
 
 macro_rules! err {
@@ -332,8 +316,8 @@ impl VM {
     }
 
     #[inline]
-    fn peek(&self, lvl: ObjPointer) -> ObjPointer {
-        self.stack[self.stack.len() - (lvl as usize + 1)]
+    fn peek(&self, lvl: usize) -> ObjPointer {
+        self.stack[self.stack.len() - (lvl + 1)]
     }
 
     #[inline]
@@ -342,38 +326,39 @@ impl VM {
     }
 
     #[inline]
-    fn get_obj<'a>(&self, ptr: ObjPointer, chunk: &'a Chunk) -> &'a Object {
-        &chunk.objs[ptr as usize]
+    fn get_obj<'a>(&self, ptr: ObjPointer, prog: &'a Program) -> &'a Object {
+        &prog.chunks[ptr.0 as usize].objs[ptr.1 as usize]
     }
 
     #[inline]
-    fn get_obj_mut<'a>(&self, ptr: ObjPointer, chunk: &'a mut Chunk) -> &'a mut Object {
-        &mut chunk.objs[ptr as usize]
+    fn get_obj_mut<'a>(&self, ptr: ObjPointer, prog: &'a mut Program) -> &'a mut Object {
+        &mut prog.chunks[ptr.0 as usize].objs[ptr.1 as usize]
     }
 
     #[inline]
-    fn push_obj(&mut self, obj: Object, chunk: &mut Chunk) {
-        let ptr = chunk.objs.len() as ObjPointer;
+    fn push_obj(&mut self, obj: Object, prog: &mut Program, fc: FuncCounter) {
+        let chunk = &mut prog.chunks[fc as usize];
+        let ptr = (fc, chunk.objs.len() as ObjCounter) as ObjPointer;
         chunk.objs.push(obj);
         self.push(ptr)
     }
 
     #[inline]
-    fn peek_obj<'a>(&self, lvl: ObjPointer, chunk: &'a Chunk) -> &'a Object {
+    fn peek_obj<'a>(&self, lvl: usize, prog: &'a Program) -> &'a Object {
         let ptr = self.peek(lvl);
-        self.get_obj(ptr, chunk)
+        self.get_obj(ptr, prog)
     }
 
-    fn peek_obj_mut<'a>(&self, lvl: ObjPointer, chunk: &'a mut Chunk) -> &'a mut Object {
+    fn peek_obj_mut<'a>(&self, lvl: usize, prog: &'a mut Program) -> &'a mut Object {
         let ptr = self.peek(lvl);
-        self.get_obj_mut(ptr, chunk)
+        self.get_obj_mut(ptr, prog)
     }
 
     #[inline]
     // delete the const out of the chunk
-    fn pop_obj(&mut self, chunk: &Chunk) -> Object {
+    fn pop_obj(&mut self, prog: &Program) -> Object {
         let ptr = self.pop();
-        self.get_obj(ptr, chunk).clone()
+        self.get_obj(ptr, prog).clone()
     }
 
     fn must_op<T>(&self, r: Option<T>, msg: &'static str) -> Result<T, VMError> {
@@ -390,14 +375,10 @@ impl VM {
             func: Func::new(),
         };
         while frame.ip < prog.chunks[frame.func.chunk as usize].count() {
-            let chunk = &mut prog.chunks[frame.func.chunk as usize];
-            chunk.disassemble_one(frame.ip);
-            let byte = chunk.code[frame.ip];
+            // chunk.disassemble_one(frame.ip);
+            let byte = prog.chunks[frame.func.chunk as usize].code[frame.ip];
             match byte {
                 ByteCode::Push(i) => {
-                    if i as usize >= chunk.objs.len() {
-                        return Err(format!("constant doesn't exist"));
-                    }
                     self.push(i);
                 }
                 ByteCode::Add
@@ -406,8 +387,8 @@ impl VM {
                 | ByteCode::Div
                 | ByteCode::Less
                 | ByteCode::Greater => {
-                    let y = self.pop_obj(chunk);
-                    let x = self.pop_obj(chunk);
+                    let y = self.pop_obj(&prog);
+                    let x = self.pop_obj(&prog);
                     if let Object::Integer(x) = x
                         && let Object::Integer(y) = y
                     {
@@ -432,7 +413,7 @@ impl VM {
                             },
                             _ => unreachable!(),
                         };
-                        self.push_obj(obj, chunk);
+                        self.push_obj(obj, &mut prog, frame.func.chunk);
                     } else if let Object::Float(x) = x
                         && let Object::Float(y) = y
                     {
@@ -461,7 +442,7 @@ impl VM {
                             },
                             _ => unreachable!(),
                         };
-                        self.push_obj(obj, chunk);
+                        self.push_obj(obj, &mut prog, frame.func.chunk);
                     } else if let Object::String(x) = x
                         && let Object::String(y) = y
                     {
@@ -471,7 +452,7 @@ impl VM {
                             }
                             _ => return Err(format!("you can only concatenate strings with '+'"))
                         };
-                        self.push_obj(obj, chunk);
+                        self.push_obj(obj, &mut prog, frame.func.chunk);
                     } else {
                         return Err(format!("invalid operands for {:?}", byte))
                     };
@@ -481,17 +462,19 @@ impl VM {
                     let mut buffer = String::new();
                     for _ in 0..count {
                         let ptr = self.pop();
-                        buffer = format!("{}{}", self.get_obj(ptr, chunk).to_string(chunk), buffer);
+                        let obj = self.get_obj(ptr, &prog);
+                        buffer = format!("{}{}", obj.to_string(&prog), buffer);
                     }
                     println!("{}", buffer);
                 }
                 ByteCode::Neg => {
-                    let x = err!(self.pop_obj(chunk).expect_integer("operand is required to be an integer"));
-                    self.push_obj(Object::Integer(-x), chunk);
+                    let x = err!(self.pop_obj(&prog).expect_integer("operand is required to be an integer"));
+                    let obj = Object::Integer(-x);
+                    self.push_obj(obj, &mut prog, frame.func.chunk);
                 }
                 ByteCode::Or | ByteCode::And => {
-                    let y = err!(self.pop_obj(chunk).expect_bool("left operand is required to be a boolean"));
-                    let x = err!(self.pop_obj(chunk).expect_bool("right operand is require to be a boolean"));
+                    let y = err!(self.pop_obj(&prog).expect_bool("left operand is required to be a boolean"));
+                    let x = err!(self.pop_obj(&prog).expect_bool("right operand is require to be a boolean"));
                     let obj = match byte {
                         ByteCode::Or => {
                             Object::Bool(x || y)
@@ -503,21 +486,21 @@ impl VM {
                             unreachable!()
                         },
                     };
-                    self.push_obj(obj, chunk);
+                    self.push_obj(obj, &mut prog, frame.func.chunk);
                 }
                 ByteCode::Equal => {
-                    let y = self.pop_obj(chunk);
-                    let x = self.pop_obj(chunk);
+                    let y = self.pop_obj(&prog);
+                    let x = self.pop_obj(&prog);
                     let obj = Object::Bool(x == y);
-                    self.push_obj(obj, chunk);
+                    self.push_obj(obj, &mut prog, frame.func.chunk);
                 }
                 ByteCode::Not => {
-                    let x = err!(self.pop_obj(chunk).expect_bool("operand expected to be a boolean"));
+                    let x = err!(self.pop_obj(&prog).expect_bool("operand expected to be a boolean"));
                     let obj = Object::Bool(!x);
-                    self.push_obj(obj, chunk);
+                    self.push_obj(obj, &mut prog, frame.func.chunk);
                 }
                 ByteCode::Pop => {
-                    self.pop_obj(chunk);
+                    self.pop_obj(&prog);
                 }
                 ByteCode::GDef => {
                     let ptr = self.pop();
@@ -530,9 +513,9 @@ impl VM {
                 ByteCode::GSet(idx) => {
                     let new_ptr = self.pop();
                     // RUNTIME_TYPECHECKING_START
-                    let new_val = self.get_obj(new_ptr, chunk);
+                    let new_val = self.get_obj(new_ptr, &prog);
                     let old_ptr = self.globals[idx as usize];
-                    let old_val = self.get_obj(old_ptr, chunk);
+                    let old_val = self.get_obj(old_ptr, &prog);
                     if !new_val.is_of_type(old_val) {
                         return Err(format!(
                             "mismatched types ({:?} != {:?})",
@@ -551,9 +534,9 @@ impl VM {
                 ByteCode::LSet(idx) => {
                     let new_ptr = self.peek(0);
                     // RUNTIME_TYPECHECKING_START
-                    let new_val = self.get_obj(new_ptr, chunk);
+                    let new_val = self.get_obj(new_ptr, &prog);
                     let old_ptr = self.stack[frame.stack_offset + idx as usize];
-                    let old_val = self.get_obj(old_ptr, chunk);
+                    let old_val = self.get_obj(old_ptr, &prog);
                     if !new_val.is_of_type(old_val) {
                         return Err(format!(
                             "mismatched types ({:?} != {:?})",
@@ -568,7 +551,7 @@ impl VM {
                     frame.ip = dest - 1; // to make room for iterating
                 }
                 ByteCode::JumpIfFalse(dest) => {
-                    if !self.pop_obj(chunk).to_bool() {
+                    if !self.pop_obj(&prog).to_bool() {
                         frame.ip = dest - 1;
                     }
                 }
@@ -576,7 +559,7 @@ impl VM {
                     let args = (0..args_c).map(|_| self.pop()).rev().collect::<Vec<ObjPointer>>();
                     // TODO: move call validation to compile-time so that you only need to store
                     // the function's pointer in the CallFrame and get rid of the chunk pointers
-                    let obj = self.pop_obj(&mut prog.chunks[0]);
+                    let obj = self.pop_obj(&prog);
                     if let Object::Function(func) = obj {
                         // TODO: typecheck args types also
                         if func.arity != args_c as usize {
@@ -613,12 +596,12 @@ impl VM {
                     let mut items: Vec<ObjPointer> = (0..count).map(|_| self.pop()).collect();
                     items.reverse();
                     let obj = Object::Array(Array { typ, items });
-                    self.push_obj(obj, chunk);
+                    self.push_obj(obj, &mut prog, frame.func.chunk);
                 }
                 ByteCode::ArrayGet => {
-                    let idx = self.pop_obj(chunk).expect_integer("invalid index")?;
+                    let idx = self.pop_obj(&prog).expect_integer("invalid index")?;
                     let ptr = self.pop();
-                    if let Object::Array(arr) = self.get_obj(ptr, chunk) {
+                    if let Object::Array(arr) = self.get_obj(ptr, &prog) {
                         if !(0 <= idx && (idx as usize) < arr.items.len()) {
                             return Err(VMError::from("index out of bounds"));
                         }
@@ -629,9 +612,9 @@ impl VM {
                 }
                 ByteCode::ArraySet => {
                     let val = self.pop();
-                    let idx = self.pop_obj(chunk).expect_integer("invalid index")?;
+                    let idx = self.pop_obj(&prog).expect_integer("invalid index")?;
                     let ptr = self.pop();
-                    if let Object::Array(arr) = self.get_obj_mut(ptr, chunk) {
+                    if let Object::Array(arr) = self.get_obj_mut(ptr, &mut prog) {
                         if !(0 <= idx && (idx as usize) < arr.items.len()) {
                             return Err(VMError::from("index out of bounds"));
                         }
@@ -657,3 +640,12 @@ impl VM {
         self.call_stack.pop().unwrap()
     }
 }
+
+type VMError = String;
+pub type LocalCounter = usize;
+pub type GlobalCounter = u8;
+pub type ArgsCounter = u8;
+pub type FuncCounter = u8;
+pub type ObjCounter = u8;
+pub type ObjPointer = (FuncCounter, ObjCounter);
+pub type InstPtr = usize;
