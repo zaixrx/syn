@@ -1,31 +1,9 @@
-func div_10_arr(size: Int, arr: Int) {
-	let i = 0;
-	while i < size {
-		arr[i] = arr[i] / 10;
-		i = i + 1;
-	}
-}
-
-func print_arr(size: Int, arr: Int) {
-	let i = 0;
-	while i < size {
-		println("arr[{}] = {}", i, arr[i]);
-		i = i + 1;
-	}
-}
-
 func main() {
-	let arr = [
-		69,
-		420,
-		705
-	];
-
-	// arr.push
-	// arr.pop
-	// arr.len
-	// arr[i] = 
-
-	div_10_arr(arr, 3);
-	print_arr(arr, 3);
+	let arr = [69, 420, 705];
+	let idx = 0;
+	while idx < 3 {
+		println("arr[{}] = {}", idx, arr[idx]);
+		// println("{}", arr[idx]);
+		idx = idx + 1;
+	}
 }

@@ -534,7 +534,9 @@ impl Compiler {
         Ok(())
     }
 
-    fn args_format(&mut self, format: &str) -> Result<ArgsCounter, CompilerError> {  
+    fn args_format(&mut self) -> Result<ArgsCounter, CompilerError> {
+        self.expect(Token::String, "expected format string")?; 
+        let format = self.curr.lexm.clone();
         let mut offset = 0;
         let mut next_sub_str = |buf: &mut String| -> Result<bool, &'static str> {
             let mut start = None;
@@ -583,8 +585,10 @@ impl Compiler {
                 Ok(is_end) => is_end,
                 Err(msg) => return Err(self.error(msg))
             };
-            self.load_const(Object::String(buf))?;
-            count += 1;
+            if buf.len() > 0 {
+                self.load_const(Object::String(buf))?;
+                count += 1;
+            }
             if is_end {
                 break;
             }
@@ -597,14 +601,9 @@ impl Compiler {
         Ok(count)
     }
 
-    fn compile_format(&mut self) -> Result<ArgsCounter, CompilerError> {
-        self.expect(Token::String, "expected format string")?; 
-        self.args_format(self.curr.lexm.clone().as_str())
-    }
-
     fn compile_print(&mut self) -> Result<(), CompilerError> {
         self.expect(Token::LeftParen, "expected disclosing '('")?;
-        let count = self.compile_format()?;
+        let count = self.args_format()?;
         self.expect(Token::SemiColon, "expected ';' after statement")?;
         self.push_bytecode(ByteCode::Print(count))?;
         Ok(())

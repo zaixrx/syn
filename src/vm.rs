@@ -5,13 +5,15 @@ pub type LocalCounter = u8;
 pub type GlobalCounter = u8;
 pub type ArgsCounter = u8;
 pub type FuncCounter = u8;
-pub type ObjPointer = u8;
+pub type ObjCounter = u8;
+pub type ObjPointer = (FuncCounter, ObjCounter);
 pub type InstPtr = usize;
 
 pub struct VM {
-    stack: Vec<ObjPointer>,
     globals: Vec<ObjPointer>,
+    stack: Vec<ObjPointer>,
     call_stack: Vec<CallFrame>,
+    obj: Vec<Object>
 }
 
 pub struct Program {
@@ -28,7 +30,6 @@ impl Program {
     pub fn disassemble(&self) {
         println!("== PROG_START ==");
         for chunk in &self.chunks {
-            // println!("func {} ({}) -> {:?}:", func.name, func.arity, func.retype);
             chunk.disassemble();
             println!();
         }
@@ -106,7 +107,6 @@ impl Func {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Clone, PartialEq, Debug)]
 pub enum Object {
     Integer(i32),
@@ -140,20 +140,6 @@ impl Object {
         }
     }
     
-    fn expect_func(self, msg: &'static str) -> Result<Func, VMError> {
-        match self {
-            Object::Function(x) => Ok(x),
-            _ => Err(VMError::from(msg))
-        }
-    }
-
-    fn expect_array(self, msg: &'static str) -> Result<Array, VMError> {
-        match self {
-            Object::Array(x) => Ok(x),
-            _ => Err(VMError::from(msg))
-        }
-    }
-
     fn get_var_type(&self) -> Type {
         match self {
             Object::Integer(_) => Type::Integer,
@@ -170,6 +156,41 @@ impl Object {
         let t1 = self.get_var_type();
         let t2 = other.get_var_type();
         t1 == t2 || t1 == Type::None || t2 == Type::None
+    }
+
+    fn to_string(&self, chunk: &Chunk) -> String {
+        match self {
+            Object::Integer(val) => {
+                format!("{}", val)
+            }
+            Object::Float(val) => {
+                format!("{}", val)
+            }
+            Object::Bool(val) => {
+                format!("{}", val)
+            }
+            Object::String(val) => {
+                format!("{}", val)
+            }
+            Object::Function(val) => {
+                format!("Func<{}>", val.name)
+            }
+            Object::Array(val) => {
+                let mut s = String::from("[");
+                for i in 0..val.items.len() {
+                    let obj_str = chunk.objs[val.items[i].1 as usize].to_string(chunk);
+                    if i+1 < val.items.len() {
+                        s = format!("{}{}, ", s, obj_str);
+                    } else {
+                        s = format!("{}{}]", s, obj_str);
+                    }
+                }
+                s
+            }
+            Object::Nil => {
+                format!("nil")
+            }
+        }
     }
 }
 
@@ -257,13 +278,13 @@ impl Chunk {
         self.code[idx] = b;
     }
 
-    pub fn load_const(&mut self, c: Object) -> Result<u8, &'static str> {
-        let index = self.objs.len() as ObjPointer;
-        if index > ObjPointer::MAX {
+    pub fn load_const(&mut self, obj: Object) -> Result<u8, &'static str> {
+        let index = self.objs.len();
+        if index >= ObjCounter::MAX as usize {
             Err("can't define more constants in chunk")
         } else {
+            self.objs.push(obj);
             self.push(ByteCode::Push(index));
-            self.objs.push(c);
             Ok(index)
         }
     }
@@ -273,7 +294,7 @@ impl Chunk {
         print!("{:0>4}", ip);
         match self.code[ip] {
             ByteCode::Push(i) => {
-                println!("  Push {} --> {}", i, self.objs[i as usize]);
+                println!("  Push {} --> {:?}", i, self.objs[i as usize]);
             }
             byte => println!("  {:?}", byte),
         };
@@ -331,11 +352,6 @@ impl VM {
     }
 
     #[inline]
-    fn set_obj(&self, ptr: ObjPointer, val: Object, chunk: &mut Chunk) {
-        chunk.objs[ptr as usize] = val;
-    }
-
-    #[inline]
     fn push_obj(&mut self, obj: Object, chunk: &mut Chunk) {
         let ptr = chunk.objs.len() as ObjPointer;
         chunk.objs.push(obj);
@@ -374,8 +390,8 @@ impl VM {
             func: Func::new(),
         };
         while frame.ip < prog.chunks[frame.func.chunk as usize].count() {
-            let chunk = prog.chunks.get_mut(frame.func.chunk as usize).unwrap();
-            // chunk.disassemble_one(frame.ip);
+            let chunk = &mut prog.chunks[frame.func.chunk as usize];
+            chunk.disassemble_one(frame.ip);
             let byte = chunk.code[frame.ip];
             match byte {
                 ByteCode::Push(i) => {
@@ -464,7 +480,8 @@ impl VM {
                     // TODO: utterly slow
                     let mut buffer = String::new();
                     for _ in 0..count {
-                        buffer = format!("{}{}", self.pop_obj(chunk), buffer);
+                        let ptr = self.pop();
+                        buffer = format!("{}{}", self.get_obj(ptr, chunk).to_string(chunk), buffer);
                     }
                     println!("{}", buffer);
                 }
@@ -532,7 +549,7 @@ impl VM {
                 }
                 // TODO: move typechecking to compile time
                 ByteCode::LSet(idx) => {
-                    let new_ptr = self.pop();
+                    let new_ptr = self.peek(0);
                     // RUNTIME_TYPECHECKING_START
                     let new_val = self.get_obj(new_ptr, chunk);
                     let old_ptr = self.stack[frame.stack_offset + idx as usize];
@@ -559,22 +576,23 @@ impl VM {
                     let args = (0..args_c).map(|_| self.pop()).rev().collect::<Vec<ObjPointer>>();
                     // TODO: move call validation to compile-time so that you only need to store
                     // the function's pointer in the CallFrame and get rid of the chunk pointers
-                    let func = match self.pop_obj(chunk).expect_func("invalid calling target") {
-                        Ok(idx) => idx,
-                        Err(err) => return Err(VMError::from(err))
-                    };
-                    // TODO: typecheck args types also
-                    if func.arity != args_c as usize {
-                        return Err(format!("expected {} args got {}", func.arity, args_c));
+                    let obj = self.pop_obj(&mut prog.chunks[0]);
+                    if let Object::Function(func) = obj {
+                        // TODO: typecheck args types also
+                        if func.arity != args_c as usize {
+                            return Err(format!("expected {} args got {}", func.arity, args_c));
+                        }
+                        self.push_func(frame.clone());
+                        frame.ip = 0;
+                        frame.func = func;
+                        frame.stack_offset = self.stack.len();
+                        for arg in args {
+                            self.push(arg);
+                        }
+                        continue;
+                    } else {
+                        return Err(VMError::from("invalid call target"));
                     }
-                    self.push_func(frame.clone());
-                    frame.ip = 0;
-                    frame.func = func;
-                    frame.stack_offset = self.stack.len();
-                    for arg in args {
-                        self.push(arg);
-                    }
-                    continue;
                 }
                 ByteCode::Ret => { // don't `continue;`
                     let ret_val_ptr = self.pop();
@@ -592,13 +610,15 @@ impl VM {
                 // NOTE: I'm not gonna typecheck arrays here as it is uselessly painful
                 ByteCode::Array(count) => {
                     let typ = Type::None;
-                    let items = (0..count).map(|_| self.pop()).rev().collect();
+                    let mut items: Vec<ObjPointer> = (0..count).map(|_| self.pop()).collect();
+                    items.reverse();
                     let obj = Object::Array(Array { typ, items });
                     self.push_obj(obj, chunk);
                 }
                 ByteCode::ArrayGet => {
                     let idx = self.pop_obj(chunk).expect_integer("invalid index")?;
-                    if let Object::Array(arr) = self.peek_obj(0, chunk) {
+                    let ptr = self.pop();
+                    if let Object::Array(arr) = self.get_obj(ptr, chunk) {
                         if !(0 <= idx && (idx as usize) < arr.items.len()) {
                             return Err(VMError::from("index out of bounds"));
                         }
@@ -610,7 +630,8 @@ impl VM {
                 ByteCode::ArraySet => {
                     let val = self.pop();
                     let idx = self.pop_obj(chunk).expect_integer("invalid index")?;
-                    if let Object::Array(arr) = self.peek_obj_mut(0, chunk) {
+                    let ptr = self.pop();
+                    if let Object::Array(arr) = self.get_obj_mut(ptr, chunk) {
                         if !(0 <= idx && (idx as usize) < arr.items.len()) {
                             return Err(VMError::from("index out of bounds"));
                         }
@@ -621,6 +642,7 @@ impl VM {
                     self.push(val);
                 }
             }
+            println!("{:?}", self.stack);
             frame.ip += 1;
         }
         return Ok(());
@@ -633,29 +655,5 @@ impl VM {
 
     fn pop_func(&mut self) -> CallFrame {
         self.call_stack.pop().unwrap()
-    }
-}
-
-impl std::fmt::Display for Object {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Object::Integer(val) => write!(f, "{}", val),
-            Object::Float(val) => write!(f, "{}", val),
-            Object::Bool(val) => write!(f, "{}", val),
-            Object::String(val) => write!(f, "{}", val),
-            Object::Function(val) => write!(f, "Func<{}>", val.name),
-            Object::Array(val) => {
-                write!(f, "[")?;
-                for i in 0..val.items.len() {
-                    if i + 1 < val.items.len() {
-                        write!(f, "{}, ", val.items[i])?;
-                    } else {
-                        write!(f, "{}", val.items[i])?;
-                    }
-                }
-                write!(f, "]")
-            },
-            Object::Nil => write!(f, "nil"),
-        }
     }
 }
