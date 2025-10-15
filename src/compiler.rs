@@ -7,7 +7,7 @@ use crate::lexer::{
 use crate::vm::{
     Program,
     ByteCode,
-    Constant,
+    Object,
     Func,
     Chunk,
     Type,
@@ -63,7 +63,7 @@ enum Precedence {
     Primary,
 }
 
-type RuleFn = fn(&mut Compiler, cab_assign: bool) -> Result<(), CompilerError>;
+type RuleFn = fn(&mut Compiler, can_assign: bool) -> Result<(), CompilerError>;
 struct Rule {
     prefix: Option<RuleFn>,
     infix: Option<RuleFn>,
@@ -363,7 +363,7 @@ impl Compiler {
         if self.check(Token::Equal)? {
             self.expression()?;
         } else {
-            self.load_const(Constant::Nil)?;
+            self.load_const(Object::Nil)?;
         }
         self.push_bytecode(byte)?;
         self.expect(Token::SemiColon, "expected ';' after statement")?;
@@ -380,7 +380,7 @@ impl Compiler {
         match self
             .prog
             .get_top_level_chunk()
-            .load_const(Constant::Function(func))
+            .load_const(Object::Function(func))
         {
             Ok(idx) => idx,
             Err(err) => return Err(self.error(err)),
@@ -407,7 +407,7 @@ impl Compiler {
             self.declaration()?;
         }
         self.expect(Token::RightBrace, "expected enclosing '}'")?;
-        self.load_const(Constant::Nil)?;
+        self.load_const(Object::Nil)?;
         self.push_bytecode(ByteCode::Ret)?;
         self.end_scope()?;
         let chunk = match self.prog.push(self.curr_chunk.take().unwrap()) {
@@ -524,7 +524,7 @@ impl Compiler {
         if !self.check(Token::SemiColon)? {
             self.expression()?;
         } else {
-            self.load_const(Constant::Nil)?;
+            self.load_const(Object::Nil)?;
         }
         self.expect(Token::SemiColon, "expected ';' after statement")?;
         if self.curr_chunk.is_none() {
@@ -583,7 +583,7 @@ impl Compiler {
                 Ok(is_end) => is_end,
                 Err(msg) => return Err(self.error(msg))
             };
-            self.load_const(Constant::String(buf))?;
+            self.load_const(Object::String(buf))?;
             count += 1;
             if is_end {
                 break;
@@ -616,18 +616,18 @@ impl Compiler {
     fn literal(&mut self, _: bool) -> Result<(), CompilerError> {
         match self.curr.tokn {
             Token::Int(val) => {
-                self.load_const(Constant::Integer(val))?
+                self.load_const(Object::Integer(val))?
             },
             Token::Float(val) => {
-                self.load_const(Constant::Float(val))?
+                self.load_const(Object::Float(val))?
             },
             Token::Bool(val) => {
-                self.load_const(Constant::Bool(val))?
+                self.load_const(Object::Bool(val))?
             },
             Token::String => {
-                self.load_const(Constant::String(self.curr.lexm.clone()))?
+                self.load_const(Object::String(self.curr.lexm.clone()))?
             }
-            Token::Nil => self.load_const(Constant::Nil)?,
+            Token::Nil => self.load_const(Object::Nil)?,
             _ => panic!("Compiler::literal ~ unhandled literal {:?}", self.curr),
         };
         Ok(())
@@ -683,10 +683,15 @@ impl Compiler {
         Ok(())
     }
 
-    fn index(&mut self, _: bool) -> Result<(), CompilerError> {
+    fn index(&mut self, can_assign: bool) -> Result<(), CompilerError> {
         self.expression()?;
         self.expect(Token::RightBracket, "expected enclosing ']'")?;
-        self.push_bytecode(ByteCode::Index)?;
+        if can_assign && self.check(Token::Equal)? {
+            self.expression()?;
+            self.push_bytecode(ByteCode::ArraySet)?;
+        } else {
+            self.push_bytecode(ByteCode::ArrayGet)?;
+        }
         Ok(())
     }
 
@@ -778,7 +783,7 @@ impl Compiler {
     }
 
     #[inline]
-    fn load_const(&mut self, c: Constant) -> Result<u8, CompilerError> {
+    fn load_const(&mut self, c: Object) -> Result<u8, CompilerError> {
         match self.get_chunk()?.load_const(c) {
             Ok(idx) => Ok(idx),
             Err(msg) => Err(self.error(msg)),
@@ -994,3 +999,4 @@ impl LoopState {
         self.start = 0;
     }
 }
+

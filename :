@@ -67,7 +67,7 @@ pub struct CallFrame {
 #[derive(Debug, Clone)]
 pub struct Array {
     pub typ: Type,
-    pub items: Vec<ObjPointer>,
+    pub items: Vec<Object>,
 }
 
 impl PartialEq for Array {
@@ -326,11 +326,6 @@ impl VM {
     }
 
     #[inline]
-    fn get_obj_mut<'a>(&self, ptr: ObjPointer, chunk: &'a mut Chunk) -> &'a mut Object {
-        &mut chunk.objs[ptr as usize]
-    }
-
-    #[inline]
     fn set_obj(&self, ptr: ObjPointer, val: Object, chunk: &mut Chunk) {
         chunk.objs[ptr as usize] = val;
     }
@@ -348,11 +343,6 @@ impl VM {
         self.get_obj(ptr, chunk)
     }
 
-    fn peek_obj_mut<'a>(&self, lvl: ObjPointer, chunk: &'a mut Chunk) -> &'a mut Object {
-        let ptr = self.peek(lvl);
-        self.get_obj_mut(ptr, chunk)
-    }
-
     #[inline]
     // delete the const out of the chunk
     fn pop_obj(&mut self, chunk: &Chunk) -> Object {
@@ -367,14 +357,14 @@ impl VM {
         }
     }
 
-    pub fn exec(mut self, mut prog: Program) -> Result<(), VMError> {
+    pub fn exec(mut self, prog: Program) -> Result<(), VMError> {
         let mut frame = CallFrame {
             ip: 0,
             stack_offset: 0,
             func: Func::new(),
         };
         while frame.ip < prog.chunks[frame.func.chunk as usize].count() {
-            let chunk = prog.chunks.get_mut(frame.func.chunk as usize).unwrap();
+            let chunk = &prog.chunks[frame.func.chunk as usize];
             // chunk.disassemble_one(frame.ip);
             let byte = chunk.code[frame.ip];
             match byte {
@@ -390,8 +380,8 @@ impl VM {
                 | ByteCode::Div
                 | ByteCode::Less
                 | ByteCode::Greater => {
-                    let y = self.pop_obj(chunk);
-                    let x = self.pop_obj(chunk);
+                    let y = self.pop_obj(&chunk);
+                    let x = self.pop_obj(&chunk);
                     if let Object::Integer(x) = x
                         && let Object::Integer(y) = y
                     {
@@ -416,7 +406,7 @@ impl VM {
                             },
                             _ => unreachable!(),
                         };
-                        self.push_obj(obj, chunk);
+                        self.push_obj(obj, &mut chunk);
                     } else if let Object::Float(x) = x
                         && let Object::Float(y) = y
                     {
@@ -445,7 +435,7 @@ impl VM {
                             },
                             _ => unreachable!(),
                         };
-                        self.push_obj(obj, chunk);
+                        self.push_obj(obj, &mut chunk);
                     } else if let Object::String(x) = x
                         && let Object::String(y) = y
                     {
@@ -455,7 +445,7 @@ impl VM {
                             }
                             _ => return Err(format!("you can only concatenate strings with '+'"))
                         };
-                        self.push_obj(obj, chunk);
+                        self.push_obj(obj, &mut chunk);
                     } else {
                         return Err(format!("invalid operands for {:?}", byte))
                     };
@@ -464,17 +454,17 @@ impl VM {
                     // TODO: utterly slow
                     let mut buffer = String::new();
                     for _ in 0..count {
-                        buffer = format!("{}{}", self.pop_obj(chunk), buffer);
+                        buffer = format!("{}{}", self.pop_obj(&chunk), buffer);
                     }
                     println!("{}", buffer);
                 }
                 ByteCode::Neg => {
-                    let x = err!(self.pop_obj(chunk).expect_integer("operand is required to be an integer"));
-                    self.push_obj(Object::Integer(-x), chunk);
+                    let x = err!(self.pop_obj(&chunk).expect_integer("operand is required to be an integer"));
+                    self.push_obj(Object::Integer(-x), &mut chunk);
                 }
                 ByteCode::Or | ByteCode::And => {
-                    let y = err!(self.pop_obj(chunk).expect_bool("left operand is required to be a boolean"));
-                    let x = err!(self.pop_obj(chunk).expect_bool("right operand is require to be a boolean"));
+                    let y = err!(self.pop_obj(&chunk).expect_bool("left operand is required to be a boolean"));
+                    let x = err!(self.pop_obj(&chunk).expect_bool("right operand is require to be a boolean"));
                     let obj = match byte {
                         ByteCode::Or => {
                             Object::Bool(x || y)
@@ -486,21 +476,21 @@ impl VM {
                             unreachable!()
                         },
                     };
-                    self.push_obj(obj, chunk);
+                    self.push_obj(obj, &mut chunk);
                 }
                 ByteCode::Equal => {
-                    let y = self.pop_obj(chunk);
-                    let x = self.pop_obj(chunk);
+                    let y = self.pop_obj(&chunk);
+                    let x = self.pop_obj(&chunk);
                     let obj = Object::Bool(x == y);
-                    self.push_obj(obj, chunk);
+                    self.push_obj(obj, &mut chunk);
                 }
                 ByteCode::Not => {
-                    let x = err!(self.pop_obj(chunk).expect_bool("operand expected to be a boolean"));
+                    let x = err!(self.pop_obj(&chunk).expect_bool("operand expected to be a boolean"));
                     let obj = Object::Bool(!x);
-                    self.push_obj(obj, chunk);
+                    self.push_obj(obj, &mut chunk);
                 }
                 ByteCode::Pop => {
-                    self.pop_obj(chunk);
+                    self.pop_obj(&chunk);
                 }
                 ByteCode::GDef => {
                     let ptr = self.pop();
@@ -509,115 +499,111 @@ impl VM {
                 ByteCode::GGet(idx) => {
                     self.push(self.globals[idx as usize]);
                 }
-                // TODO: move typechecking to compile time
                 ByteCode::GSet(idx) => {
-                    let new_ptr = self.pop();
-                    // RUNTIME_TYPECHECKING_START
-                    let new_val = self.get_obj(new_ptr, chunk);
-                    let old_ptr = self.globals[idx as usize];
-                    let old_val = self.get_obj(old_ptr, chunk);
-                    if !new_val.is_of_type(old_val) {
+                    let ptr = self.globals[idx as usize];
+                    let new_val = self.peek_obj(0, &chunk);
+                    let old_val = self.get_obj(ptr, &chunk);
+                    // TODO: move typechecking to compile time
+                    if !.is_of_type(val) {
                         return Err(format!(
                             "mismatched types ({:?} != {:?})",
-                            new_val.get_var_type(),
-                            old_val.get_var_type()
+                            val.get_var_type(),
+                            self.stack[idx as usize].get_var_type()
                         ));
                     }
-                    // RUNTIME_TYPECHECKING_END
-                    self.globals[idx as usize] = new_ptr;
+                    self.globals[idx as usize] = val;
                 }
                 ByteCode::LDef => (), // yeah
-                ByteCode::LGet(idx) => {
-                    self.push(self.stack[frame.stack_offset + idx as usize])
+                ByteCode::LGet(offset) => {
+                    self.push(self.stack[frame.stack_offset + offset as usize].clone())
                 }
-                // TODO: move typechecking to compile time
-                ByteCode::LSet(idx) => {
-                    let new_ptr = self.pop();
-                    // RUNTIME_TYPECHECKING_START
-                    let new_val = self.get_obj(new_ptr, chunk);
-                    let old_ptr = self.stack[frame.stack_offset + idx as usize];
-                    let old_val = self.get_obj(old_ptr, chunk);
-                    if !new_val.is_of_type(old_val) {
+                ByteCode::LSet(offset) => {
+                    let val = self.peek();
+                    if !&self.stack[frame.stack_offset + offset as usize].is_of_type(val) {
                         return Err(format!(
                             "mismatched types ({:?} != {:?})",
-                            new_val.get_var_type(),
-                            old_val.get_var_type()
+                            val.get_var_type(),
+                            self.stack[frame.stack_offset + offset as usize].get_var_type()
                         ));
                     }
-                    // RUNTIME_TYPECHECKING_END
-                    self.stack[frame.stack_offset + idx as usize] = new_ptr;
+                    self.stack[frame.stack_offset + offset as usize] = val.clone();
                 }
                 ByteCode::Jump(dest) => {
                     frame.ip = dest - 1; // to make room for iterating
                 }
                 ByteCode::JumpIfFalse(dest) => {
-                    if !self.pop_obj(chunk).to_bool() {
+                    if !self.pop().to_bool() {
                         frame.ip = dest - 1;
                     }
                 }
                 ByteCode::Call(args_c) => {
-                    let args = (0..args_c).map(|_| self.pop()).rev().collect::<Vec<ObjPointer>>();
-                    // TODO: move call validation to compile-time so that you only need to store
-                    // the function's pointer in the CallFrame and get rid of the chunk pointers
-                    let func = match self.pop_obj(chunk).expect_func("invalid calling target") {
+                    // TODO: move additional check to typechecker at compile-time
+                    let args = (0..args_c).map(|_| self.pop()).collect::<Vec<Object>>();
+                    let func = match self.pop().expect_func("invalid calling target") {
                         Ok(idx) => idx,
                         Err(err) => return Err(VMError::from(err))
                     };
-                    // TODO: typecheck args types also
                     if func.arity != args_c as usize {
                         return Err(format!("expected {} args got {}", func.arity, args_c));
                     }
                     self.push_func(frame.clone());
-                    frame.ip = 0;
-                    frame.func = func;
-                    frame.stack_offset = self.stack.len();
+                    frame = CallFrame {
+                        ip: 0,
+                        func,
+                        stack_offset: self.stack.len(),
+                    };
                     for arg in args {
                         self.push(arg);
                     }
                     continue;
                 }
                 ByteCode::Ret => { // don't `continue;`
-                    let ret_val_ptr = self.pop();
-                    while self.stack.len() > frame.stack_offset { // pop all garbage
-                                                                  // NOTE: this could have been
-                                                                  // done at compile-time similar
-                                                                  // to how blocks manage locals
-                                                                  // but because of args I'll just
-                                                                  // let it here as it is the same
+                    let val = self.pop();
+                    while self.stack.len() > frame.stack_offset {
                         self.pop();
                     }
                     frame = self.pop_func();
-                    self.push(ret_val_ptr);
+                    self.push(val);
                 }
-                // NOTE: I'm not gonna typecheck arrays here as it is uselessly painful
                 ByteCode::Array(count) => {
-                    let typ = Type::None;
-                    let items = (0..count).map(|_| self.pop()).rev().collect();
-                    let obj = Object::Array(Array { typ, items });
-                    self.push_obj(obj, chunk);
+                    let mut typ = Type::None;
+                    let mut items = vec![Object::Nil; count];
+                    for i in 0..count {
+                        let val = self.pop();
+                        if i == 0 {
+                            typ = val.get_var_type();
+                        } else {
+                            if typ != val.get_var_type() {
+                                return Err(
+                                    format!("invalid type {:?}", val.get_var_type())
+                                );
+                            }
+                        }
+                        items[count - (i + 1)] = val;
+                    }
+                    self.push(Object::Array(Array { typ, items }));
                 }
                 ByteCode::ArrayGet => {
-                    let idx = self.pop_obj(chunk).expect_integer("invalid index")?;
-                    if let Object::Array(arr) = self.peek_obj(0, chunk) {
-                        if !(0 <= idx && (idx as usize) < arr.items.len()) {
-                            return Err(VMError::from("index out of bounds"));
-                        }
-                        self.push(arr.items[idx as usize]);
-                    } else {
-                        return Err(VMError::from("invalid index target"));
+                    let idx = err!(self.pop().expect_integer("invalid array index"));
+                    let arr = err!(self.pop().expect_array("you can only index arrays"));
+                    if !(0 <= idx && (idx as usize) < arr.items.len()) {
+                        return Err(VMError::from("index out of bounds"));
                     }
+                    self.push(arr.items[idx as usize].clone());
                 }
                 ByteCode::ArraySet => {
                     let val = self.pop();
-                    let idx = self.pop_obj(chunk).expect_integer("invalid index")?;
-                    if let Object::Array(arr) = self.peek_obj_mut(0, chunk) {
-                        if !(0 <= idx && (idx as usize) < arr.items.len()) {
-                            return Err(VMError::from("index out of bounds"));
-                        }
-                        arr.items[idx as usize] = val;
-                    } else {
-                        return Err(VMError::from("invalid index target"));
+                    let idx = err!(self.pop().expect_integer("invalid array index"));
+                    let mut arr = err!(self.pop().expect_array("you can only index arrays"));
+                    if !(0 <= idx && (idx as usize) < arr.items.len()) {
+                        return Err(VMError::from("index out of bounds"));
                     }
+                    if arr.typ != val.get_var_type() {
+                        return Err(
+                            format!("invalid type {:?}", val.get_var_type())
+                        );
+                    }
+                    arr.items[idx as usize] = val;
                     self.push(val);
                 }
             }
