@@ -1,5 +1,6 @@
 func main() {
-    let hello = "hello";
-    let world = "world";
-    println("{}", hello + " " + world);
+    	let hello = "hello";
+    	let world = "world";
+ 	let result = hello + " " + world;
+    	println("{}", "hello");
 }

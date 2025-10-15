@@ -400,7 +400,7 @@ impl VM {
                     {
                         match byte {
                             ByteCode::Add => {
-                                self.push(Constant::String(String::from(x + y.as_str())))
+                                self.push(Constant::String(String::from(x + y.as_str())));
                             }
                             _ => return Err(format!("you can only concatenate strings with '+'")),
                         }

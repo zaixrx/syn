@@ -619,8 +619,7 @@ impl Compiler {
             Token::Float(val) => self.load_const(Constant::Float(val))?,
             Token::Bool(val) => self.load_const(Constant::Bool(val))?,
             Token::String => {
-                let s = &self.curr.lexm[1..self.curr.lexm.len() - 1];
-                self.load_const(Constant::String(s.into()))?
+                self.load_const(Constant::String(self.curr.lexm.clone()))?
             }
             Token::Nil => self.load_const(Constant::Nil)?,
             _ => panic!("Compiler::literal ~ unhandled literal {:?}", self.curr),
