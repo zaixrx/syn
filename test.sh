@@ -21,7 +21,7 @@ lookup() {
 				success_out "$entry: Succeeded"
 			else
 				error_out "$entry: Failed"
-				exit
+				exit 69
 			fi
 		fi
 		clear
