@@ -1,0 +1,12 @@
+name: Guard
+
+on: [push]
+
+jobs:
+  test:
+    runs-on: "ubuntu-latest"
+    container:
+      image: rust:1.88.0
+    steps:
+      - uses: "actions/checkout@v3"
+      - run: "chmod +x ./test.sh && ./test.sh"

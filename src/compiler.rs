@@ -615,9 +615,15 @@ impl Compiler {
 impl Compiler {
     fn literal(&mut self, _: bool) -> Result<(), CompilerError> {
         match self.curr.tokn {
-            Token::Int(val) => self.load_const(Constant::Integer(val))?,
-            Token::Float(val) => self.load_const(Constant::Float(val))?,
-            Token::Bool(val) => self.load_const(Constant::Bool(val))?,
+            Token::Int(val) => {
+                self.load_const(Constant::Integer(val))?
+            },
+            Token::Float(val) => {
+                self.load_const(Constant::Float(val))?
+            },
+            Token::Bool(val) => {
+                self.load_const(Constant::Bool(val))?
+            },
             Token::String => {
                 self.load_const(Constant::String(self.curr.lexm.clone()))?
             }
