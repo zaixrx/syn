@@ -24,10 +24,6 @@ impl Program {
         println!("== PROG_START ==");
     }
 
-    pub fn get_top_level_chunk(&mut self) -> &mut Chunk {
-        &mut self.chunks[0]
-    }
-
     pub fn push(&mut self, c: Chunk) -> Result<FuncCounter, &'static str> {
         let idx = self.chunks.len() as FuncCounter;
         if idx < FuncCounter::MAX {
@@ -465,7 +461,6 @@ impl VM {
                         let obj = self.get_obj(ptr, &prog);
                         buffer = format!("{}{}", obj.to_string(&prog), buffer);
                     }
-                    println!("{}", buffer);
                 }
                 ByteCode::Neg => {
                     let x = err!(self.pop_obj(&prog).expect_integer("operand is required to be an integer"));
@@ -625,7 +620,6 @@ impl VM {
                     self.push(val);
                 }
             }
-            println!("{:?}", self.stack);
             frame.ip += 1;
         }
         return Ok(());

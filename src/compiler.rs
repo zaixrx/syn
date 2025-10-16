@@ -23,7 +23,7 @@ pub struct Compiler {
     curr: TokenHeader,
 
     prog: Program,
-    curr_func: Option<FuncCounter>,
+    chunk: Option<FuncCounter>,
 
     globals: Vec<Global>,
     locals: Vec<Local>,
@@ -85,10 +85,10 @@ impl Compiler {
             },
 
             prog: Program::new(),
-            curr_func: None,
+            chunk: None,
 
             globals: Vec::new(),
-            locals: Vec::with_capacity(LocalCounter::MAX as usize),
+            locals: Vec::new(),
             scope_depth: 0,
             loop_state: LoopState::new(),
 
@@ -119,9 +119,7 @@ impl Compiler {
             Err(errs)
         } else {
             if let Some(idx) = self.resolve_global("main") {
-                self.prog
-                    .get_top_level_chunk()
-                    .pushs(ByteCode::GGet(idx), ByteCode::Call(0));
+                self.prog.chunks[0].pushs(ByteCode::GGet(idx), ByteCode::Call(0));
             } else {
                 return Err(vec![
                     self.error("consider adding `func main()` to your program"),
@@ -374,7 +372,7 @@ impl Compiler {
     }
 
     fn compile_func(&mut self) -> Result<(), CompilerError> {
-        if self.curr_func.is_some() {
+        if self.chunk.is_some() {
             return Err(self.error("can't have nested functions"));
         }
         self.expect(Token::Identifer, "expected the function's name")?;
@@ -382,19 +380,21 @@ impl Compiler {
         let func = self.compile_func_body(self.curr.lexm.clone())?;
         match self
             .prog
-            .get_top_level_chunk()
-            .load_const(Object::Function(func))
+            .chunk_load_const(0, Object::Function(func))
         {
             Ok(idx) => idx,
             Err(err) => return Err(self.error(err)),
         };
-        self.prog.get_top_level_chunk().push(ByteCode::GDef);
+        self.prog.chunks[0].push(ByteCode::GDef);
         Ok(())
     }
 
     fn compile_func_body(&mut self, name: String) -> Result<Func, CompilerError> {
-        self.curr_func = Some(Chunk::new());
         self.start_scope();
+        self.chunk = match self.prog.push(Chunk::new()) {
+            Ok(idx) => Some(idx),
+            Err(msg) => return Err(self.error(msg))
+        };
         let arity = self.compile_params()?;
         let retype = if self.check(Token::RightArrow)? {
             self.compile_type()?
@@ -413,11 +413,7 @@ impl Compiler {
         self.load_const(Object::Nil)?;
         self.push_bytecode(ByteCode::Ret)?;
         self.end_scope()?;
-        let chunk = match self.prog.push(self.curr_func.take().unwrap()) {
-            Ok(idx) => idx,
-            Err(msg) => return Err(self.error(msg))
-        };
-        Ok(Func { name, arity, retype, chunk, })
+        Ok(Func { name, arity, retype, chunk: self.chunk.take().unwrap() })
     }
 
     fn compile_params(&mut self) -> Result<usize, CompilerError> {
@@ -530,7 +526,7 @@ impl Compiler {
             self.load_const(Object::Nil)?;
         }
         self.expect(Token::SemiColon, "expected ';' after statement")?;
-        if self.curr_func.is_none() {
+        if self.chunk.is_none() {
             return Err(self.error("'return' can only be used inside a function"));
         }
         self.push_bytecode(ByteCode::Ret)?;
@@ -757,10 +753,16 @@ impl Compiler {
 impl Compiler {
     #[inline]
     fn get_chunk(&mut self) -> Result<&mut Chunk, CompilerError> {
-        match self.curr_func {
-            Some(ref mut chunk) => Ok(chunk),
-            None if self.declarative_mode => Ok(self.prog.get_top_level_chunk()),
-            _ => Err(self.error("non-declarative statements must be wrapped within functions")),
+        match self.chunk {
+            Some(chunk) => {
+                Ok(&mut self.prog.chunks[chunk as usize])
+            },
+            None if self.declarative_mode => {
+                Ok(&mut self.prog.chunks[0])
+            }
+            _ => {
+                Err(self.error("non-declarative statements must be wrapped within functions"))
+            }
         }
     }
 
@@ -781,12 +783,12 @@ impl Compiler {
 
     #[inline]
     fn bytecode_count(&self) -> Result<usize, CompilerError> {
-        Ok(self.curr_func.as_ref().unwrap().count())
+        Ok(self.prog.chunks[self.chunk.unwrap() as usize].count())
     }
 
     #[inline]
     fn load_const(&mut self, c: Object) -> Result<u8, CompilerError> {
-        match self.get_chunk()?.load_const(c) {
+        match self.prog.chunk_load_const(self.chunk.unwrap(), c) {
             Ok(idx) => Ok(idx),
             Err(msg) => Err(self.error(msg)),
         }
