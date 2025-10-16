@@ -1,4 +1,8 @@
+use crate::lexer::TokenHeader;
+
 pub struct VM {
+    prog: Program,
+    frame: CallFrame,
     globals: Vec<ObjPointer>,
     stack: Vec<ObjPointer>,
     call_stack: Vec<CallFrame>
@@ -68,6 +72,7 @@ impl Program {
 #[derive(Clone, Debug)]
 pub struct Chunk {
     code: Vec<ByteCode>,
+    info: Vec<TokenHeader>,
     objs: Vec<Object>,
 }
 
@@ -75,6 +80,7 @@ impl Chunk {
     pub fn new() -> Self {
         Self {
             objs: Vec::new(),
+            info: Vec::new(),
             code: Vec::new(),
         }
     }
@@ -83,14 +89,15 @@ impl Chunk {
         self.code.len()
     }
 
-    pub fn push(&mut self, b: ByteCode) -> usize {
+    pub fn push(&mut self, b: ByteCode, t: TokenHeader) -> usize {
+        self.info.push(t);
         self.code.push(b);
         self.code.len() - 1
     }
 
-    pub fn pushs(&mut self, b1: ByteCode, b2: ByteCode) -> usize {
-        self.push(b1);
-        self.push(b2)
+    pub fn pushs(&mut self, b1: ByteCode, b2: ByteCode, t: TokenHeader) -> usize {
+        self.push(b1, t.clone());
+        self.push(b2, t)
     }
 
     pub fn set(&mut self, idx: usize, b: ByteCode) {
@@ -156,20 +163,6 @@ impl Object {
         }
     }
 
-    fn expect_integer(self, msg: &'static str) -> Result<i32, &'static str> {
-        match self {
-            Object::Integer(x) => Ok(x),
-            _ => Err(msg),
-        }
-    }
-
-    fn expect_bool(self, msg: &'static str) -> Result<bool, &'static str> {
-        match self {
-            Object::Bool(x) => Ok(x),
-            _ => Err(msg),
-        }
-    }
-    
     fn get_var_type(&self) -> Type {
         match self {
             Object::Integer(_) => Type::Integer,
@@ -288,18 +281,16 @@ pub enum Type {
     None,
 }
 
-macro_rules! err {
-    ($x: expr) => {
-        match $x {
-            Ok(idx) => idx,
-            Err(msg) => return Err(VMError::from(msg))
-        }
-    };
-}
-
 impl VM {
-    pub fn new() -> Self {
+    pub fn new(prog: Program) -> Self {
+        let frame = CallFrame {
+            ip: 0,
+            stack_offset: 0,
+            func: Func::new(),
+        };
         Self {
+            prog,
+            frame,
             stack: Vec::new(),
             call_stack: Vec::new(),
             globals: Vec::new(),
@@ -322,57 +313,53 @@ impl VM {
     }
 
     #[inline]
-    fn get_obj<'a>(&self, ptr: ObjPointer, prog: &'a Program) -> &'a Object {
-        &prog.chunks[ptr.0 as usize].objs[ptr.1 as usize]
+    fn get_obj(&self, ptr: ObjPointer) -> &Object {
+        &self.prog.chunks[ptr.0 as usize].objs[ptr.1 as usize]
     }
 
     #[inline]
-    fn get_obj_mut<'a>(&self, ptr: ObjPointer, prog: &'a mut Program) -> &'a mut Object {
-        &mut prog.chunks[ptr.0 as usize].objs[ptr.1 as usize]
+    fn get_obj_mut(&mut self, ptr: ObjPointer) -> &mut Object {
+        &mut self.prog.chunks[ptr.0 as usize].objs[ptr.1 as usize]
     }
 
     #[inline]
-    fn push_obj(&mut self, obj: Object, prog: &mut Program, fc: FuncCounter) {
-        let chunk = &mut prog.chunks[fc as usize];
+    fn push_obj(&mut self, obj: Object) {
+        let fc = self.frame.func.chunk;
+        let chunk = &mut self.prog.chunks[fc as usize];
         let ptr = (fc, chunk.objs.len() as ObjCounter) as ObjPointer;
         chunk.objs.push(obj);
         self.push(ptr)
     }
 
     #[inline]
-    fn peek_obj<'a>(&self, lvl: usize, prog: &'a Program) -> &'a Object {
+    fn peek_obj(&self, lvl: usize) -> &Object {
         let ptr = self.peek(lvl);
-        self.get_obj(ptr, prog)
+        self.get_obj(ptr)
     }
 
-    fn peek_obj_mut<'a>(&self, lvl: usize, prog: &'a mut Program) -> &'a mut Object {
+    fn peek_obj_mut(&mut self, lvl: usize) -> &mut Object {
         let ptr = self.peek(lvl);
-        self.get_obj_mut(ptr, prog)
+        self.get_obj_mut(ptr)
     }
 
     #[inline]
     // delete the const out of the chunk
-    fn pop_obj(&mut self, prog: &Program) -> Object {
+    fn pop_obj(&mut self) -> Object {
         let ptr = self.pop();
-        self.get_obj(ptr, prog).clone()
+        self.get_obj(ptr).clone()
     }
 
     fn must_op<T>(&self, r: Option<T>, msg: &'static str) -> Result<T, VMError> {
         match r {
             Some(v) => Ok(v),
-            None => Err(VMError::from(msg)),
+            None => Err(self.s_error(msg)),
         }
     }
 
-    pub fn exec(mut self, mut prog: Program) -> Result<(), VMError> {
-        let mut frame = CallFrame {
-            ip: 0,
-            stack_offset: 0,
-            func: Func::new(),
-        };
-        while frame.ip < prog.chunks[frame.func.chunk as usize].count() {
+    pub fn exec(mut self) -> Result<(), VMError> {
+        while self.frame.ip < self.prog.chunks[self.frame.func.chunk as usize].count() {
             // chunk.disassemble_one(frame.ip);
-            let byte = prog.chunks[frame.func.chunk as usize].code[frame.ip];
+            let byte = self.prog.chunks[self.frame.func.chunk as usize].code[self.frame.ip];
             match byte {
                 ByteCode::Push(i) => {
                     self.push(i);
@@ -383,8 +370,8 @@ impl VM {
                 | ByteCode::Div
                 | ByteCode::Less
                 | ByteCode::Greater => {
-                    let y = self.pop_obj(&prog);
-                    let x = self.pop_obj(&prog);
+                    let y = self.pop_obj();
+                    let x = self.pop_obj();
                     if let Object::Integer(x) = x
                         && let Object::Integer(y) = y
                     {
@@ -409,7 +396,7 @@ impl VM {
                             },
                             _ => unreachable!(),
                         };
-                        self.push_obj(obj, &mut prog, frame.func.chunk);
+                        self.push_obj(obj);
                     } else if let Object::Float(x) = x
                         && let Object::Float(y) = y
                     {
@@ -438,7 +425,7 @@ impl VM {
                             },
                             _ => unreachable!(),
                         };
-                        self.push_obj(obj, &mut prog, frame.func.chunk);
+                        self.push_obj(obj);
                     } else if let Object::String(x) = x
                         && let Object::String(y) = y
                     {
@@ -446,11 +433,15 @@ impl VM {
                             ByteCode::Add => {
                                 Object::String(String::from(x + y.as_str()))
                             }
-                            _ => return Err(format!("you can only concatenate strings with '+'"))
+                            _ => return Err(self.s_error("you can only concatenate strings with '+'"))
                         };
-                        self.push_obj(obj, &mut prog, frame.func.chunk);
+                        self.push_obj(obj);
                     } else {
-                        return Err(format!("invalid operands for {:?}", byte))
+                        return Err(
+                            self.error(
+                                format!("invalid operands for {:?}", byte)
+                            )
+                        )
                     };
                 }
                 ByteCode::Print(count) => {
@@ -458,18 +449,18 @@ impl VM {
                     let mut buffer = String::new();
                     for _ in 0..count {
                         let ptr = self.pop();
-                        let obj = self.get_obj(ptr, &prog);
-                        buffer = format!("{}{}", obj.to_string(&prog), buffer);
+                        let obj = self.get_obj(ptr);
+                        buffer = format!("{}{}", obj.to_string(&self.prog), buffer);
                     }
                 }
                 ByteCode::Neg => {
-                    let x = err!(self.pop_obj(&prog).expect_integer("operand is required to be an integer"));
+                    let x = self.pop_int("operand is required to be an integer")?;
                     let obj = Object::Integer(-x);
-                    self.push_obj(obj, &mut prog, frame.func.chunk);
+                    self.push_obj(obj);
                 }
                 ByteCode::Or | ByteCode::And => {
-                    let y = err!(self.pop_obj(&prog).expect_bool("left operand is required to be a boolean"));
-                    let x = err!(self.pop_obj(&prog).expect_bool("right operand is require to be a boolean"));
+                    let y = self.pop_bool("left operand is required to be a boolean")?;
+                    let x = self.pop_bool("right operand is require to be a boolean")?;
                     let obj = match byte {
                         ByteCode::Or => {
                             Object::Bool(x || y)
@@ -481,21 +472,21 @@ impl VM {
                             unreachable!()
                         },
                     };
-                    self.push_obj(obj, &mut prog, frame.func.chunk);
+                    self.push_obj(obj);
                 }
                 ByteCode::Equal => {
-                    let y = self.pop_obj(&prog);
-                    let x = self.pop_obj(&prog);
+                    let y = self.pop_obj();
+                    let x = self.pop_obj();
                     let obj = Object::Bool(x == y);
-                    self.push_obj(obj, &mut prog, frame.func.chunk);
+                    self.push_obj(obj);
                 }
                 ByteCode::Not => {
-                    let x = err!(self.pop_obj(&prog).expect_bool("operand expected to be a boolean"));
+                    let x = self.pop_bool("operand expected to be a boolean")?;
                     let obj = Object::Bool(!x);
-                    self.push_obj(obj, &mut prog, frame.func.chunk);
+                    self.push_obj(obj);
                 }
                 ByteCode::Pop => {
-                    self.pop_obj(&prog);
+                    self.pop();
                 }
                 ByteCode::GDef => {
                     let ptr = self.pop();
@@ -507,74 +498,54 @@ impl VM {
                 // TODO: move typechecking to compile time
                 ByteCode::GSet(idx) => {
                     let new_ptr = self.pop();
-                    // RUNTIME_TYPECHECKING_START
-                    let new_val = self.get_obj(new_ptr, &prog);
-                    let old_ptr = self.globals[idx as usize];
-                    let old_val = self.get_obj(old_ptr, &prog);
-                    if !new_val.is_of_type(old_val) {
-                        return Err(format!(
-                            "mismatched types ({:?} != {:?})",
-                            new_val.get_var_type(),
-                            old_val.get_var_type()
-                        ));
-                    }
-                    // RUNTIME_TYPECHECKING_END
                     self.globals[idx as usize] = new_ptr;
                 }
                 ByteCode::LDef => (), // yeah
                 ByteCode::LGet(idx) => {
-                    self.push(self.stack[frame.stack_offset + idx as usize])
+                    self.push(self.stack[self.frame.stack_offset + idx as usize])
                 }
                 // TODO: move typechecking to compile time
                 ByteCode::LSet(idx) => {
                     let new_ptr = self.peek(0);
-                    // RUNTIME_TYPECHECKING_START
-                    let new_val = self.get_obj(new_ptr, &prog);
-                    let old_ptr = self.stack[frame.stack_offset + idx as usize];
-                    let old_val = self.get_obj(old_ptr, &prog);
-                    if !new_val.is_of_type(old_val) {
-                        return Err(format!(
-                            "mismatched types ({:?} != {:?})",
-                            new_val.get_var_type(),
-                            old_val.get_var_type()
-                        ));
-                    }
-                    // RUNTIME_TYPECHECKING_END
-                    self.stack[frame.stack_offset + idx as usize] = new_ptr;
+                    self.stack[self.frame.stack_offset + idx as usize] = new_ptr;
                 }
                 ByteCode::Jump(dest) => {
-                    frame.ip = dest - 1; // to make room for iterating
+                    self.frame.ip = dest - 1; // to make room for iterating
                 }
                 ByteCode::JumpIfFalse(dest) => {
-                    if !self.pop_obj(&prog).to_bool() {
-                        frame.ip = dest - 1;
+                    if !self.pop_obj().to_bool() {
+                        self.frame.ip = dest - 1;
                     }
                 }
                 ByteCode::Call(args_c) => {
                     let args = (0..args_c).map(|_| self.pop()).rev().collect::<Vec<ObjPointer>>();
                     // TODO: move call validation to compile-time so that you only need to store
                     // the function's pointer in the CallFrame and get rid of the chunk pointers
-                    let obj = self.pop_obj(&prog);
+                    let obj = self.pop_obj();
                     if let Object::Function(func) = obj {
                         // TODO: typecheck args types also
                         if func.arity != args_c as usize {
-                            return Err(format!("expected {} args got {}", func.arity, args_c));
+                            return Err(
+                                self.error(
+                                    format!("expected {} args got {}", func.arity, args_c)
+                                )
+                            );
                         }
-                        self.push_func(frame.clone());
-                        frame.ip = 0;
-                        frame.func = func;
-                        frame.stack_offset = self.stack.len();
+                        self.push_func(self.frame.clone());
+                        self.frame.ip = 0;
+                        self.frame.func = func;
+                        self.frame.stack_offset = self.stack.len();
                         for arg in args {
                             self.push(arg);
                         }
                         continue;
                     } else {
-                        return Err(VMError::from("invalid call target"));
+                        return Err(self.s_error("invalid call target"));
                     }
                 }
                 ByteCode::Ret => { // don't `continue;`
                     let ret_val_ptr = self.pop();
-                    while self.stack.len() > frame.stack_offset { // pop all garbage
+                    while self.stack.len() > self.frame.stack_offset { // pop all garbage
                                                                   // NOTE: this could have been
                                                                   // done at compile-time similar
                                                                   // to how blocks manage locals
@@ -582,7 +553,7 @@ impl VM {
                                                                   // let it here as it is the same
                         self.pop();
                     }
-                    frame = self.pop_func();
+                    self.frame = self.pop_func();
                     self.push(ret_val_ptr);
                 }
                 // NOTE: I'm not gonna typecheck arrays here as it is uselessly painful
@@ -591,36 +562,36 @@ impl VM {
                     let mut items: Vec<ObjPointer> = (0..count).map(|_| self.pop()).collect();
                     items.reverse();
                     let obj = Object::Array(Array { typ, items });
-                    self.push_obj(obj, &mut prog, frame.func.chunk);
+                    self.push_obj(obj);
                 }
                 ByteCode::ArrayGet => {
-                    let idx = self.pop_obj(&prog).expect_integer("invalid index")?;
+                    let idx = self.pop_int("invalid index")?;
                     let ptr = self.pop();
-                    if let Object::Array(arr) = self.get_obj(ptr, &prog) {
+                    if let Object::Array(arr) = self.get_obj(ptr) {
                         if !(0 <= idx && (idx as usize) < arr.items.len()) {
-                            return Err(VMError::from("index out of bounds"));
+                            return Err(self.s_error("index out of bounds"));
                         }
                         self.push(arr.items[idx as usize]);
                     } else {
-                        return Err(VMError::from("invalid index target"));
+                        return Err(self.s_error("invalid index target"));
                     }
                 }
                 ByteCode::ArraySet => {
                     let val = self.pop();
-                    let idx = self.pop_obj(&prog).expect_integer("invalid index")?;
+                    let idx = self.pop_int("invalid index")?;
                     let ptr = self.pop();
-                    if let Object::Array(arr) = self.get_obj_mut(ptr, &mut prog) {
+                    if let Object::Array(arr) = self.get_obj_mut(ptr) {
                         if !(0 <= idx && (idx as usize) < arr.items.len()) {
-                            return Err(VMError::from("index out of bounds"));
+                            return Err(self.s_error("index out of bounds"));
                         }
                         arr.items[idx as usize] = val;
                     } else {
-                        return Err(VMError::from("invalid index target"));
+                        return Err(self.s_error("invalid index target"));
                     }
                     self.push(val);
                 }
             }
-            frame.ip += 1;
+            self.frame.ip += 1;
         }
         return Ok(());
     }
@@ -633,9 +604,38 @@ impl VM {
     fn pop_func(&mut self) -> CallFrame {
         self.call_stack.pop().unwrap()
     }
+
+    fn pop_bool(&mut self, msg: &'static str) -> Result<bool, VMError> {
+        match self.pop_obj() {
+            Object::Bool(x) => Ok(x),
+            _ => Err(self.s_error(msg))
+        }
+    }
+
+    fn pop_int(&mut self, msg: &'static str) -> Result<i32, VMError> {
+        match self.pop_obj() {
+            Object::Integer(x) => Ok(x),
+            _ => Err(self.s_error(msg))
+        }
+    }
+
+    fn s_error(&self, msg: &'static str) -> VMError {
+        self.error(msg.into())
+    }
+
+    fn error(&self, msg: String) -> VMError {
+        VMError {
+            msg,
+            tok: 
+                self.prog.chunks[
+                    self.frame.func.chunk as usize
+                ].info[
+                    self.frame.ip as usize
+                ].clone()
+        }
+    }
 }
 
-type VMError = String;
 pub type LocalCounter = usize;
 pub type GlobalCounter = u8;
 pub type ArgsCounter = u8;
@@ -643,3 +643,21 @@ pub type FuncCounter = u8;
 pub type ObjCounter = u8;
 pub type ObjPointer = (FuncCounter, ObjCounter);
 pub type InstPtr = usize;
+
+#[derive(Debug)]
+struct VMError {
+    msg: String,
+    tok: TokenHeader,
+}
+
+impl std::fmt::Display for VMError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "Error at {}-{}: {} at {}",
+            self.tok.line, self.tok.coln, self.msg, self.tok.lexm
+        )
+    }
+}
+
+impl std::error::Error for VMError {}

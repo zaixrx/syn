@@ -119,7 +119,7 @@ impl Compiler {
             Err(errs)
         } else {
             if let Some(idx) = self.resolve_global("main") {
-                self.prog.chunks[0].pushs(ByteCode::GGet(idx), ByteCode::Call(0));
+                self.prog.chunks[0].pushs(ByteCode::GGet(idx), ByteCode::Call(0), self.curr.clone());
             } else {
                 return Err(vec![
                     self.error("consider adding `func main()` to your program"),
@@ -385,7 +385,7 @@ impl Compiler {
             Ok(idx) => idx,
             Err(err) => return Err(self.error(err)),
         };
-        self.prog.chunks[0].push(ByteCode::GDef);
+        self.prog.chunks[0].push(ByteCode::GDef, self.curr.clone());
         Ok(())
     }
 
@@ -768,12 +768,14 @@ impl Compiler {
 
     #[inline]
     fn push_bytecode(&mut self, b: ByteCode) -> Result<usize, CompilerError> {
-        Ok(self.get_chunk()?.push(b))
+        let tok = self.curr.clone();
+        Ok(self.get_chunk()?.push(b, tok))
     }
 
     #[inline]
     fn push_bytecodes(&mut self, b1: ByteCode, b2: ByteCode) -> Result<usize, CompilerError> {
-        Ok(self.get_chunk()?.pushs(b1, b2))
+        let tok = self.curr.clone();
+        Ok(self.get_chunk()?.pushs(b1, b2, tok))
     }
 
     #[inline]
@@ -938,6 +940,29 @@ impl Compiler {
     }
 }
 
+impl LoopState {
+    fn new() -> Self {
+        Self {
+            start: 0,
+            in_loop: false,
+            break_jumps: Vec::new(),
+        }
+    }
+
+    fn start_loop(&mut self, start: usize) {
+        self.in_loop = true;
+        self.start = start;
+        unsafe {
+            self.break_jumps.set_len(0);
+        }
+    }
+
+    fn end_loop(&mut self) {
+        self.in_loop = false;
+        self.start = 0;
+    }
+}
+
 #[derive(Debug)]
 pub struct CompilerError {
     line: usize,
@@ -980,27 +1005,3 @@ impl std::fmt::Display for CompilerError {
 }
 
 impl std::error::Error for CompilerError {}
-
-impl LoopState {
-    fn new() -> Self {
-        Self {
-            start: 0,
-            in_loop: false,
-            break_jumps: Vec::new(),
-        }
-    }
-
-    fn start_loop(&mut self, start: usize) {
-        self.in_loop = true;
-        self.start = start;
-        unsafe {
-            self.break_jumps.set_len(0);
-        }
-    }
-
-    fn end_loop(&mut self) {
-        self.in_loop = false;
-        self.start = 0;
-    }
-}
-
