@@ -12,10 +12,12 @@ use crate::vm::{
     Chunk,
     Type,
     InstPtr,
+
+    ObjCounter,
+    FuncCounter,
     ArgsCounter,
     LocalCounter,
     GlobalCounter,
-    FuncCounter
 };
 
 pub struct Compiler {
@@ -380,7 +382,7 @@ impl Compiler {
         let func = self.compile_func_body(self.curr.lexm.clone())?;
         match self
             .prog
-            .chunk_load_const(0, Object::Function(func))
+            .chunk_load_const(0, Object::Function(func), self.curr.clone())
         {
             Ok(idx) => idx,
             Err(err) => return Err(self.error(err)),
@@ -789,8 +791,8 @@ impl Compiler {
     }
 
     #[inline]
-    fn load_const(&mut self, c: Object) -> Result<u8, CompilerError> {
-        match self.prog.chunk_load_const(self.chunk.unwrap(), c) {
+    fn load_const(&mut self, c: Object) -> Result<ObjCounter, CompilerError> {
+        match self.prog.chunk_load_const(self.chunk.unwrap_or_default(), c, self.curr.clone()) {
             Ok(idx) => Ok(idx),
             Err(msg) => Err(self.error(msg)),
         }

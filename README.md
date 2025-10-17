@@ -5,13 +5,13 @@ providing (hopefully) garabage collection and JIT compilation
 
 ```
 // syn is statically typed
-func fib(n: Float) -> Float {
-    if n <= 1.0 {
-        return 1.0;
+func fib(n: Int) -> Int {
+    if n <= 1 {
+        return 1;
     }
-    let a = 1.0;
-    let b = 1.0;
-    while n > 0.0 {
+    let a = 1;
+    let b = 1;
+    while n > 0 {
         a = a + b;
         b = a - b;
         n = n - 1;
@@ -25,8 +25,8 @@ func get_fib() -> Func {
 }
 
 func main() {
-    let x = 123.0;
-    print("get_fib()({}) = {}, target, get_fib()(target));
+    let x = 30;
+    println("get_fib()({}) = {}", x, get_fib()(x));
 }
 ```
 

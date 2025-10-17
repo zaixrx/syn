@@ -40,7 +40,7 @@ fn main() {
         prog.disassemble();
     }
 
-    VM::new().exec(prog).unwrap_or_else(|err| {
+    VM::new(prog).exec().unwrap_or_else(|err| {
         eprintln!("VM failed: {}", err);
         process::exit(69)
     });

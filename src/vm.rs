@@ -38,14 +38,17 @@ impl Program {
         }
     }
 
-    pub fn chunk_load_const(&mut self, fc: FuncCounter, obj: Object) -> Result<ObjCounter, &'static str> {
+    pub fn chunk_load_const(&mut self, fc: FuncCounter, obj: Object, tok: TokenHeader) -> Result<ObjCounter, &'static str> {
         let chunk = &mut self.chunks[fc as usize];
         let oc = chunk.objs.len() as ObjCounter;
         if oc >= ObjCounter::MAX {
             Err("can't define more constants in chunk")
         } else {
             chunk.objs.push(obj);
-            chunk.push(ByteCode::Push((fc, oc)));
+            chunk.push(
+                ByteCode::Push((fc, oc)),
+                tok
+            );
             Ok(oc)
         }
     }
@@ -161,24 +164,6 @@ impl Object {
             Object::Bool(false) | Object::Nil => false,
             _ => true,
         }
-    }
-
-    fn get_var_type(&self) -> Type {
-        match self {
-            Object::Integer(_) => Type::Integer,
-            Object::Float(_) => Type::Float,
-            Object::Bool(_) => Type::Bool,
-            Object::String(_) => Type::String,
-            Object::Function(_) => Type::Function,
-            Object::Array(_) => Type::Array,
-            Object::Nil => Type::None,
-        }
-    }
-
-    fn is_of_type(&self, other: &Object) -> bool {
-        let t1 = self.get_var_type();
-        let t2 = other.get_var_type();
-        t1 == t2 || t1 == Type::None || t2 == Type::None
     }
 
     fn to_string(&self, prog: &Program) -> String {
@@ -326,17 +311,20 @@ impl VM {
     fn push_obj(&mut self, obj: Object) {
         let fc = self.frame.func.chunk;
         let chunk = &mut self.prog.chunks[fc as usize];
-        let ptr = (fc, chunk.objs.len() as ObjCounter) as ObjPointer;
+        let oc = chunk.objs.len() as ObjCounter;
         chunk.objs.push(obj);
-        self.push(ptr)
+        self.push((fc, oc))
     }
 
+    #[allow(dead_code)]
     #[inline]
     fn peek_obj(&self, lvl: usize) -> &Object {
         let ptr = self.peek(lvl);
         self.get_obj(ptr)
     }
 
+    #[allow(dead_code)]
+    #[inline]
     fn peek_obj_mut(&mut self, lvl: usize) -> &mut Object {
         let ptr = self.peek(lvl);
         self.get_obj_mut(ptr)
@@ -358,7 +346,7 @@ impl VM {
 
     pub fn exec(mut self) -> Result<(), VMError> {
         while self.frame.ip < self.prog.chunks[self.frame.func.chunk as usize].count() {
-            // chunk.disassemble_one(frame.ip);
+            // self.prog.chunk_disassemble_one(self.frame.func.chunk, self.frame.ip);
             let byte = self.prog.chunks[self.frame.func.chunk as usize].code[self.frame.ip];
             match byte {
                 ByteCode::Push(i) => {
@@ -452,6 +440,7 @@ impl VM {
                         let obj = self.get_obj(ptr);
                         buffer = format!("{}{}", obj.to_string(&self.prog), buffer);
                     }
+                    println!("{}", buffer);
                 }
                 ByteCode::Neg => {
                     let x = self.pop_int("operand is required to be an integer")?;
@@ -592,6 +581,7 @@ impl VM {
                 }
             }
             self.frame.ip += 1;
+            // println!("stack: {:?}", self.stack);
         }
         return Ok(());
     }
@@ -636,16 +626,16 @@ impl VM {
     }
 }
 
-pub type LocalCounter = usize;
-pub type GlobalCounter = u8;
-pub type ArgsCounter = u8;
-pub type FuncCounter = u8;
-pub type ObjCounter = u8;
+pub type ObjCounter = u32;
 pub type ObjPointer = (FuncCounter, ObjCounter);
+pub type FuncCounter = u32;
+pub type ArgsCounter = u8;
+pub type LocalCounter = usize;
+pub type GlobalCounter = usize;
 pub type InstPtr = usize;
 
 #[derive(Debug)]
-struct VMError {
+pub struct VMError {
     msg: String,
     tok: TokenHeader,
 }
