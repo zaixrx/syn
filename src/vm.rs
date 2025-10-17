@@ -1,10 +1,12 @@
+use std::{collections::HashMap, fmt::Debug};
+
 use crate::lexer::TokenHeader;
 
 pub struct VM {
     prog: Program,
     frame: CallFrame,
-    globals: Vec<ObjPointer>,
     stack: Vec<ObjPointer>,
+    globals: Vec<ObjPointer>,
     call_stack: Vec<CallFrame>
 }
 
@@ -74,9 +76,10 @@ impl Program {
 
 #[derive(Clone, Debug)]
 pub struct Chunk {
+    pub objs: Vec<Object>,
     code: Vec<ByteCode>,
-    info: Vec<TokenHeader>,
-    objs: Vec<Object>,
+    info: Vec<TokenHeader>, // info for code(info.len() = code.len())
+    pub structs: HashMap<String, ObjPointer>,
 }
 
 impl Chunk {
@@ -85,6 +88,7 @@ impl Chunk {
             objs: Vec::new(),
             info: Vec::new(),
             code: Vec::new(),
+            structs: HashMap::new()
         }
     }
 
@@ -144,6 +148,8 @@ pub enum ByteCode {
     ArrayGet,
     ArraySet,
 
+    Struct(ObjPointer), // ObjPointer points to the struct's type
+
     Ret,
 }
 
@@ -155,6 +161,8 @@ pub enum Object {
     String(String),
     Array(Array),
     Function(Func),
+    Struct(Struct),
+    StructAlive(StructAlive),
     Nil,
 }
 
@@ -195,12 +203,34 @@ impl Object {
                     }
                 }
                 s
+            },
+            Object::Struct(typ) => {
+                format!("Struct<{}>", typ.name)
+            }
+            Object::StructAlive(val) => {
+                prog.chunks[val.base.0 as usize]
+                    .objs  [val.base.1 as usize].to_string(prog)
             }
             Object::Nil => {
                 format!("nil")
             }
         }
     }
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct Struct {
+    pub name: String,
+    pub fields: HashMap<String, StructMember>,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct StructMember(pub Type);
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct StructAlive {
+    pub base: ObjPointer,
+    pub data: Vec<Object>
 }
 
 #[derive(Debug, Clone)]
@@ -262,7 +292,7 @@ pub enum Type {
     String,
     Function,
     Array,
-    Struct(String),
+    Struct,
     None,
 }
 
@@ -578,6 +608,17 @@ impl VM {
                         return Err(self.s_error("invalid index target"));
                     }
                     self.push(val);
+                }
+                ByteCode::Struct(base_ptr) => {
+                    if let Object::Struct(base) = self.get_obj(base_ptr) {
+                        let mut data: Vec<Object> = 
+                            (0..base.fields.len()).map(|_| self.pop_obj()).collect();
+                        data.reverse();
+                        let le_struct = StructAlive{ base: base_ptr, data };
+                        self.push_obj(Object::StructAlive(le_struct));
+                    } else {
+                        unreachable!()
+                    }
                 }
             }
             self.frame.ip += 1;

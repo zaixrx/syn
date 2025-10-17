@@ -52,6 +52,7 @@ pub enum Token {
     Break,
     Continue,
     Return,
+    Struct,
 
     Nil,
     Int(i32),
@@ -289,6 +290,7 @@ impl Lexer {
                     "continue" => Token::Continue,
                     "return" => Token::Return,
                     "func" => Token::Func,
+                    "struct" => Token::Struct,
                     "Int" => Token::IntT,
                     "Float" => Token::FloatT,
                     "Str" => Token::StrT,

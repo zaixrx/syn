@@ -5,19 +5,20 @@ use crate::lexer::{
 };
 
 use crate::vm::{
-    Program,
-    ByteCode,
-    Object,
-    Func,
-    Chunk,
-    Type,
-    InstPtr,
-
-    ObjCounter,
-    FuncCounter,
     ArgsCounter,
-    LocalCounter,
+    ByteCode,
+    Chunk,
+    Func,
+    FuncCounter,
     GlobalCounter,
+    InstPtr,
+    LocalCounter,
+    Object,
+    Program,
+    Struct,
+    StructMember,
+    Type,
+    ObjPointer,
 };
 
 pub struct Compiler {
@@ -175,6 +176,12 @@ impl Compiler {
                 self.declarative_mode = true;
                 self.next()?;
                 self.compile_func()?;
+                self.declarative_mode = false;
+            }
+            Token::Struct => {
+                self.declarative_mode = true;
+                self.next()?;
+                self.compile_struct()?;
                 self.declarative_mode = false;
             }
             _ => {
@@ -366,7 +373,7 @@ impl Compiler {
         if self.check(Token::Equal)? {
             self.expression()?;
         } else {
-            self.load_const(Object::Nil)?;
+            self.load_obj(Object::Nil)?;
         }
         self.push_bytecode(byte)?;
         self.expect(Token::SemiColon, "expected ';' after statement")?;
@@ -412,7 +419,7 @@ impl Compiler {
             self.declaration()?;
         }
         self.expect(Token::RightBrace, "expected enclosing '}'")?;
-        self.load_const(Object::Nil)?;
+        self.load_obj(Object::Nil)?;
         self.push_bytecode(ByteCode::Ret)?;
         self.end_scope()?;
         Ok(Func { name, arity, retype, chunk: self.chunk.take().unwrap() })
@@ -437,6 +444,28 @@ impl Compiler {
         }
         self.expect(Token::RightParen, "expected enclosing ')'")?;
         Ok(count)
+    }
+
+    fn compile_struct(&mut self) -> Result<(), CompilerError> {
+        self.expect(Token::Identifer, "expected struct name")?;
+        let name = self.curr.lexm.clone();
+        self.expect(Token::LeftBrace, "expected '{'")?;
+        let mut fields = std::collections::HashMap::new();
+        while !self.check_with_eof(Token::RightBrace)? {
+            self.expect(Token::Identifer, "expected struct name")?;
+            let member_name = self.curr.lexm.clone();
+            self.expect(Token::Colon, "expected ':' as a type seperator")?;
+            let member_type = StructMember(self.compile_type()?);
+            fields.insert(member_name, member_type);
+            self.check(Token::Colon)?;
+        }
+        if self.curr.tokn != Token::RightBrace {
+            return Err(self.error("expected '}'"));
+        }
+        let le_struct = Struct{ name: name.clone(), fields };
+        let ptr = self.load_obj(Object::Struct(le_struct))?;
+        self.get_chunk()?.structs.insert(name, ptr);
+        Ok(())
     }
 
     fn compile_type(&mut self) -> Result<Type, CompilerError> {
@@ -525,7 +554,7 @@ impl Compiler {
         if !self.check(Token::SemiColon)? {
             self.expression()?;
         } else {
-            self.load_const(Object::Nil)?;
+            self.load_obj(Object::Nil)?;
         }
         self.expect(Token::SemiColon, "expected ';' after statement")?;
         if self.chunk.is_none() {
@@ -587,7 +616,7 @@ impl Compiler {
                 Err(msg) => return Err(self.error(msg))
             };
             if buf.len() > 0 {
-                self.load_const(Object::String(buf))?;
+                self.load_obj(Object::String(buf))?;
                 count += 1;
             }
             if is_end {
@@ -616,25 +645,26 @@ impl Compiler {
     fn literal(&mut self, _: bool) -> Result<(), CompilerError> {
         match self.curr.tokn {
             Token::Int(val) => {
-                self.load_const(Object::Integer(val))?
+                self.load_obj(Object::Integer(val))?
             },
             Token::Float(val) => {
-                self.load_const(Object::Float(val))?
+                self.load_obj(Object::Float(val))?
             },
             Token::Bool(val) => {
-                self.load_const(Object::Bool(val))?
+                self.load_obj(Object::Bool(val))?
             },
             Token::String => {
-                self.load_const(Object::String(self.curr.lexm.clone()))?
+                self.load_obj(Object::String(self.curr.lexm.clone()))?
             }
-            Token::Nil => self.load_const(Object::Nil)?,
+            Token::Nil => self.load_obj(Object::Nil)?,
             _ => panic!("Compiler::literal ~ unhandled literal {:?}", self.curr),
         };
         Ok(())
     }
 
     fn identifer(&mut self, can_assign: bool) -> Result<(), CompilerError> {
-        match self.resolve_local(self.curr.lexm.as_str()) {
+        let name = self.curr.lexm.clone();
+        match self.resolve_local(name.as_str()) {
             Some(idx) => {
                 if can_assign && self.check(Token::Equal)? {
                     self.expression()?;
@@ -753,14 +783,18 @@ impl Compiler {
 
 // VM::Chunk abstractions
 impl Compiler {
+    fn get_chunk_at(&mut self, fc: FuncCounter) -> &mut Chunk {
+        &mut self.prog.chunks[fc as usize]
+    }
+
     #[inline]
     fn get_chunk(&mut self) -> Result<&mut Chunk, CompilerError> {
         match self.chunk {
-            Some(chunk) => {
-                Ok(&mut self.prog.chunks[chunk as usize])
+            Some(fc) => {
+                Ok(self.get_chunk_at(fc))
             },
             None if self.declarative_mode => {
-                Ok(&mut self.prog.chunks[0])
+                Ok(self.get_chunk_at(0))
             }
             _ => {
                 Err(self.error("non-declarative statements must be wrapped within functions"))
@@ -791,9 +825,11 @@ impl Compiler {
     }
 
     #[inline]
-    fn load_const(&mut self, c: Object) -> Result<ObjCounter, CompilerError> {
-        match self.prog.chunk_load_const(self.chunk.unwrap_or_default(), c, self.curr.clone()) {
-            Ok(idx) => Ok(idx),
+    fn load_obj(&mut self, o: Object) -> Result<ObjPointer, CompilerError> {
+        // NOTE: or_default is a stupid idea
+        let fc = self.chunk.unwrap_or_default();
+        match self.prog.chunk_load_const(fc, o, self.curr.clone()) {
+            Ok(idx) => Ok((fc, idx)),
             Err(msg) => Err(self.error(msg)),
         }
     }

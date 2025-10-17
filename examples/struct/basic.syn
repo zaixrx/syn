@@ -1,0 +1,13 @@
+struct Major {
+	name: Str
+}
+
+func main() {
+	struct Minor {
+		age: Int
+	}
+
+	Major { "anis" };
+	
+	println("defined Student struct");
+}
