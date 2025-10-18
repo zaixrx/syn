@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::lexer::{
     Lexer,
     Token,
@@ -5,20 +7,7 @@ use crate::lexer::{
 };
 
 use crate::vm::{
-    ArgsCounter,
-    ByteCode,
-    Chunk,
-    Func,
-    FuncCounter,
-    GlobalCounter,
-    InstPtr,
-    LocalCounter,
-    Object,
-    Program,
-    Struct,
-    StructMember,
-    Type,
-    ObjPointer,
+    ArgsCounter, ByteCode, Chunk, Classifer, Func, FuncCounter, GlobalCounter, InstPtr, LocalCounter, ObjPointer, Object, Program, Struct, StructMember, Type
 };
 
 pub struct Compiler {
@@ -694,14 +683,21 @@ impl Compiler {
                         Some(TypeInfo::Struct(base)) => base.clone(),
                         None => return Err(self.error("expected struct declaration"))
                     };
+                    let mut set = HashSet::new();
                     for _ in 0..base.fields.len() {
                         self.expect(Token::Identifer, "expected member name")?;
                         if base.fields.get(&self.curr.lexm).is_none() {
                             return Err(self.error("undefined member in struct"));
                         }
+                        if set.contains(&self.curr.lexm) {
+                            return Err(self.error("already defined field"));
+                        } 
+                        let name = self.curr.lexm.clone();
                         self.expect(Token::Colon, "expected ':'")?;
                         self.expression()?;
                         self.check(Token::Comma)?;
+                        self.load_obj(Object::String(name.clone()))?;
+                        set.insert(name);
                     }
                     self.expect(Token::RightBrace, "expected '}'")?;
                     self.push_bytecode(ByteCode::LStruct(idx))?;
@@ -719,14 +715,21 @@ impl Compiler {
                             Some(TypeInfo::Struct(base)) => base.clone(),
                             None => return Err(self.error("expected struct declaration"))
                         };
+                        let mut set = HashSet::new();
                         for _ in 0..base.fields.len() {
                             self.expect(Token::Identifer, "expected member name")?;
                             if base.fields.get(&self.curr.lexm).is_none() {
                                 return Err(self.error("undefined member in struct"));
                             }
+                            if set.contains(&self.curr.lexm) {
+                                return Err(self.error("already defined field"));
+                            } 
+                            let name = self.curr.lexm.clone();
                             self.expect(Token::Colon, "expected ':'")?;
                             self.expression()?;
                             self.check(Token::Comma)?;
+                            self.load_obj(Object::String(name.clone()))?;
+                            set.insert(name);
                         }
                         self.expect(Token::RightBrace, "expected '}'")?;
                         self.push_bytecode(ByteCode::GStruct(idx))?;

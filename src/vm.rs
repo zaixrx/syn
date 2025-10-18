@@ -206,7 +206,7 @@ impl Object {
         }
     }
 
-    fn to_string(&self, prog: &Program) -> String {
+    fn to_string(&self, prog: &Program, tab_lvl: usize) -> String {
         match self {
             Object::Integer(val) => {
                 format!("{}", val)
@@ -227,7 +227,7 @@ impl Object {
                 let mut s = String::from("[");
                 for i in 0..val.items.len() {
                     let ptr = val.items[i];
-                    let obj_str = prog.get_obj(ptr).to_string(prog);
+                    let obj_str = prog.get_obj(ptr).to_string(prog, tab_lvl + 1);
                     if i+1 < val.items.len() {
                         s = format!("{}{}, ", s, obj_str);
                     } else {
@@ -241,9 +241,9 @@ impl Object {
             }
             Object::StructAlive(val) => {
                 if let Object::Struct(base) = prog.get_obj(val.base) {
-                    let mut s = format!("{} {{", base.name);
-                    for item in &val.data {
-                        s = format!("{s} {:?}, ", item.to_string(prog));
+                    let mut s = format!("{} {{\n", base.name);
+                    for (key, val) in &val.data {
+                        s = format!("{s}{key: >tab$}: {}\n", val.to_string(prog, tab_lvl+1), tab=(tab_lvl+1)*4);
                     }
                     format!("{s}}}")
                 } else {
@@ -269,7 +269,7 @@ pub struct StructMember(pub Type);
 #[derive(Clone, PartialEq, Debug)]
 pub struct StructAlive {
     pub base: ObjPointer,
-    pub data: Vec<Object>
+    pub data: HashMap<String, Object>
 }
 
 #[derive(Debug, Clone)]
@@ -512,7 +512,7 @@ impl VM {
                     for _ in 0..count {
                         let ptr = self.pop();
                         let obj = self.get_obj(ptr);
-                        buffer = format!("{}{}", obj.to_string(&self.prog), buffer);
+                        buffer = format!("{}{}", obj.to_string(&self.prog, 1), buffer);
                     }
                     println!("{}", buffer);
                 }
@@ -655,33 +655,35 @@ impl VM {
                 }
                 ByteCode::LStruct(idx) => {
                     let base_ptr = self.stack[self.frame.stack_offset + idx];
-                    if let Object::Struct(base) = self.get_obj(base_ptr) {
-                        let mut data: Vec<Object> = 
-                            (0..base.fields.len()).map(|_| self.pop_obj()).collect();
-                        data.reverse();
-                        let le_struct = StructAlive{ base: base_ptr, data };
-                        self.push_obj(Object::StructAlive(le_struct));
-                    } else {
-                        unreachable!()
-                    }
+                    self.push_struct(base_ptr);
                 }
                 ByteCode::GStruct(idx) => {
                     let base_ptr = self.globals[idx];
-                    if let Object::Struct(base) = self.get_obj(base_ptr) {
-                        let mut data: Vec<Object> = 
-                            (0..base.fields.len()).map(|_| self.pop_obj()).collect();
-                        data.reverse();
-                        let le_struct = StructAlive{ base: base_ptr, data };
-                        self.push_obj(Object::StructAlive(le_struct));
-                    } else {
-                        unreachable!()
-                    }
+                    self.push_struct(base_ptr);
                 }
             }
             self.frame.ip += 1;
             // println!("stack: {:?}", self.stack);
         }
         return Ok(());
+    }
+
+    fn push_struct(&mut self, base_ptr: ObjPointer) {
+        let base = match self.get_obj(base_ptr) {
+            Object::Struct(base) => base,
+            _ => unreachable!()
+        };
+        let mut data = HashMap::new();
+        for _ in 0..base.fields.len() {
+            if let Object::String(k) = self.pop_obj() {
+                let v = self.pop_obj();
+                data.insert(k, v);
+            } else {
+                unreachable!();
+            }
+        }
+        let le_struct = StructAlive{ base: base_ptr, data };
+        self.push_obj(Object::StructAlive(le_struct));
     }
 
     #[allow(unused_variables)]
