@@ -459,12 +459,12 @@ impl Compiler {
         self.expect(Token::LeftBrace, "expected '{'")?;
         let mut fields = std::collections::HashMap::new();
         while !self.check_with_eof(Token::RightBrace)? {
-            self.expect(Token::Identifer, "expected struct name")?;
+            self.expect(Token::Identifer, "expected struct member name")?;
             let member_name = self.curr.lexm.clone();
             self.expect(Token::Colon, "expected ':' as a type seperator")?;
             let member_type = StructMember(self.compile_type()?);
             fields.insert(member_name, member_type);
-            self.check(Token::Colon)?;
+            self.check(Token::Comma)?;
         }
         if self.curr.tokn != Token::RightBrace {
             return Err(self.error("expected '}'"));
@@ -494,6 +494,7 @@ impl Compiler {
             Token::BoolT => Type::Bool,
             Token::StrT => Type::String,
             Token::FuncT => Type::Function,
+            Token::Identifer => Type::Struct, // TODO: for now
             _ => return Err(self.error("expected valid type")),
         };
         self.next()?;
@@ -689,12 +690,18 @@ impl Compiler {
                     self.expression()?;
                     self.push_bytecode(ByteCode::LSet(idx))?;
                 } else if self.check(Token::LeftBrace)? {
-                    let le_struct = match &self.globals[idx].type_info {
-                        Some(TypeInfo::Struct(le_struct)) => le_struct.clone(),
+                    let base = match &self.locals[idx].type_info {
+                        Some(TypeInfo::Struct(base)) => base.clone(),
                         None => return Err(self.error("expected struct declaration"))
                     };
-                    for _ in 0..le_struct.fields.len() {
+                    for _ in 0..base.fields.len() {
+                        self.expect(Token::Identifer, "expected member name")?;
+                        if base.fields.get(&self.curr.lexm).is_none() {
+                            return Err(self.error("undefined member in struct"));
+                        }
+                        self.expect(Token::Colon, "expected ':'")?;
                         self.expression()?;
+                        self.check(Token::Comma)?;
                     }
                     self.expect(Token::RightBrace, "expected '}'")?;
                     self.push_bytecode(ByteCode::LStruct(idx))?;
@@ -708,12 +715,18 @@ impl Compiler {
                         self.expression()?;
                         self.push_bytecode(ByteCode::GSet(idx))?;
                     } else if self.check(Token::LeftBrace)? {
-                        let le_struct = match &self.globals[idx].type_info {
-                            Some(TypeInfo::Struct(le_struct)) => le_struct.clone(),
+                        let base = match &self.globals[idx].type_info {
+                            Some(TypeInfo::Struct(base)) => base.clone(),
                             None => return Err(self.error("expected struct declaration"))
                         };
-                        for _ in 0..le_struct.fields.len() {
+                        for _ in 0..base.fields.len() {
+                            self.expect(Token::Identifer, "expected member name")?;
+                            if base.fields.get(&self.curr.lexm).is_none() {
+                                return Err(self.error("undefined member in struct"));
+                            }
+                            self.expect(Token::Colon, "expected ':'")?;
                             self.expression()?;
+                            self.check(Token::Comma)?;
                         }
                         self.expect(Token::RightBrace, "expected '}'")?;
                         self.push_bytecode(ByteCode::GStruct(idx))?;

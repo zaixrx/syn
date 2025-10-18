@@ -1,13 +1,21 @@
-struct Major {
-	name: Str
+struct Person {
+	name: Str,
+	age : Int,
 }
 
 func main() {
-	struct Minor {
-		age: Int
+	struct Student {
+		base : Person,
+		major: Str,
 	}
 
-	let major = Major { "anis" };
-	
-	println("{}", major);
+	let student = Student { 
+		base: Person {
+			name: "Mohamed Anis KOUA",
+			age : 18,
+		},
+		major: "Computer Engineering",
+	};
+
+	println("{}", student);
 }
