@@ -7,7 +7,7 @@ func main() {
 		age: Int
 	}
 
-	Major { "anis" };
+	let major = Major { "anis" };
 	
-	println("defined Student struct");
+	println("{}", major);
 }

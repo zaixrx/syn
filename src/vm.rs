@@ -21,15 +21,6 @@ impl Program {
         }
     }
 
-    pub fn disassemble(&self) {
-        println!("== PROG_START ==");
-        for fc in 0..self.chunks.len() {
-            self.chunk_disassemble(fc as FuncCounter);
-            println!();
-        }
-        println!("== PROG_START ==");
-    }
-
     pub fn push(&mut self, c: Chunk) -> Result<FuncCounter, &'static str> {
         let idx = self.chunks.len() as FuncCounter;
         if idx < FuncCounter::MAX {
@@ -40,19 +31,32 @@ impl Program {
         }
     }
 
-    pub fn chunk_load_const(&mut self, fc: FuncCounter, obj: Object, tok: TokenHeader) -> Result<ObjCounter, &'static str> {
+    fn load_obj(&mut self, fc: FuncCounter, obj: Classifer<Object>, tok: TokenHeader) -> Result<ObjPointer, &'static str> {
         let chunk = &mut self.chunks[fc as usize];
-        let oc = chunk.objs.len() as ObjCounter;
-        if oc >= ObjCounter::MAX {
-            Err("can't define more constants in chunk")
-        } else {
+        let ptr = (fc, chunk.objs.len() as ObjCounter);
+        if ptr.1 < ObjCounter::MAX {
             chunk.objs.push(obj);
-            chunk.push(
-                ByteCode::Push((fc, oc)),
-                tok
-            );
-            Ok(oc)
+            chunk.push(ByteCode::Push(ptr), tok);
+            Ok(ptr)
+        } else {
+            Err("can't define more constants in chunk")
         }
+    }
+
+    pub fn chunk_load_obj(&mut self, fc: FuncCounter, obj: Object, tok: TokenHeader) -> Result<ObjPointer, &'static str> {
+        self.load_obj(fc, Classifer::Raw(obj), tok)
+    }
+
+    pub fn chunk_load_readonly_obj(&mut self, fc: FuncCounter, obj: Object, tok: TokenHeader) -> Result<ObjPointer, &'static str> {
+        self.load_obj(fc, Classifer::Readonly(obj), tok)
+    }
+
+    pub fn get_obj(&self, ptr: ObjPointer) -> &Object {
+        self.chunks[ptr.0 as usize].get_obj(ptr.1)
+    }
+
+    pub fn get_obj_mut(&mut self, ptr: ObjPointer) -> Result<&mut Object, &'static str> {
+        self.chunks[ptr.0 as usize].get_obj_mut(ptr.1)
     }
 
     #[allow(unused)]
@@ -72,14 +76,22 @@ impl Program {
             self.chunk_disassemble_one(fc, ip);
         }
     }
+
+    pub fn disassemble(&self) {
+        println!("== PROG_START ==");
+        for fc in 0..self.chunks.len() {
+            self.chunk_disassemble(fc as FuncCounter);
+            println!();
+        }
+        println!("== PROG_START ==");
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct Chunk {
-    pub objs: Vec<Object>,
+    pub objs: Vec<Classifer<Object>>,
     code: Vec<ByteCode>,
     info: Vec<TokenHeader>, // info for code(info.len() = code.len())
-    pub structs: HashMap<String, ObjPointer>,
 }
 
 impl Chunk {
@@ -88,7 +100,6 @@ impl Chunk {
             objs: Vec::new(),
             info: Vec::new(),
             code: Vec::new(),
-            structs: HashMap::new()
         }
     }
 
@@ -109,6 +120,20 @@ impl Chunk {
 
     pub fn set(&mut self, idx: usize, b: ByteCode) {
         self.code[idx] = b;
+    }
+
+    pub fn get_obj(&self, idx: ObjCounter) -> &Object {
+        match &self.objs[idx as usize] {
+            Classifer::Raw(obj) => obj,
+            Classifer::Readonly(obj) => obj
+        }
+    }
+
+    pub fn get_obj_mut(&mut self, idx: ObjCounter) -> Result<&mut Object, &'static str> {
+        match &mut self.objs[idx as usize] {
+            Classifer::Raw(obj) => Ok(obj),
+            Classifer::Readonly(_) => Err("failed to mutate")
+        }
     }
 }
 
@@ -148,9 +173,16 @@ pub enum ByteCode {
     ArrayGet,
     ArraySet,
 
-    Struct(ObjPointer), // ObjPointer points to the struct's type
+    LStruct(LocalCounter),
+    GStruct(GlobalCounter),
 
     Ret,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub enum Classifer<T> {
+    Raw(T),
+    Readonly(T),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -195,7 +227,7 @@ impl Object {
                 let mut s = String::from("[");
                 for i in 0..val.items.len() {
                     let ptr = val.items[i];
-                    let obj_str = prog.chunks[ptr.0 as usize].objs[val.items[i].1 as usize].to_string(prog);
+                    let obj_str = prog.get_obj(ptr).to_string(prog);
                     if i+1 < val.items.len() {
                         s = format!("{}{}, ", s, obj_str);
                     } else {
@@ -208,8 +240,15 @@ impl Object {
                 format!("Struct<{}>", typ.name)
             }
             Object::StructAlive(val) => {
-                prog.chunks[val.base.0 as usize]
-                    .objs  [val.base.1 as usize].to_string(prog)
+                if let Object::Struct(base) = prog.get_obj(val.base) {
+                    let mut s = format!("{} {{", base.name);
+                    for item in &val.data {
+                        s = format!("{s} {:?}, ", item.to_string(prog));
+                    }
+                    format!("{s}}}")
+                } else {
+                    unreachable!()
+                }
             }
             Object::Nil => {
                 format!("nil")
@@ -329,12 +368,17 @@ impl VM {
 
     #[inline]
     fn get_obj(&self, ptr: ObjPointer) -> &Object {
-        &self.prog.chunks[ptr.0 as usize].objs[ptr.1 as usize]
+        self.prog.get_obj(ptr)
     }
 
     #[inline]
-    fn get_obj_mut(&mut self, ptr: ObjPointer) -> &mut Object {
-        &mut self.prog.chunks[ptr.0 as usize].objs[ptr.1 as usize]
+    fn get_obj_mut(&mut self, ptr: ObjPointer) -> Result<&mut Object, VMError> {
+        let err = self.s_error("can't referece this mutably");
+        if let Ok(obj) = self.prog.get_obj_mut(ptr) {
+            Ok(obj)
+        } else {
+            Err(err)
+        }
     }
 
     #[inline]
@@ -342,7 +386,7 @@ impl VM {
         let fc = self.frame.func.chunk;
         let chunk = &mut self.prog.chunks[fc as usize];
         let oc = chunk.objs.len() as ObjCounter;
-        chunk.objs.push(obj);
+        chunk.objs.push(Classifer::Raw(obj));
         self.push((fc, oc))
     }
 
@@ -355,7 +399,7 @@ impl VM {
 
     #[allow(dead_code)]
     #[inline]
-    fn peek_obj_mut(&mut self, lvl: usize) -> &mut Object {
+    fn peek_obj_mut(&mut self, lvl: usize) -> Result<&mut Object, VMError> {
         let ptr = self.peek(lvl);
         self.get_obj_mut(ptr)
     }
@@ -521,12 +565,12 @@ impl VM {
                 }
                 ByteCode::LDef => (), // yeah
                 ByteCode::LGet(idx) => {
-                    self.push(self.stack[self.frame.stack_offset + idx as usize])
+                    self.push(self.stack[self.frame.stack_offset + idx])
                 }
                 // TODO: move typechecking to compile time
                 ByteCode::LSet(idx) => {
                     let new_ptr = self.peek(0);
-                    self.stack[self.frame.stack_offset + idx as usize] = new_ptr;
+                    self.stack[self.frame.stack_offset + idx] = new_ptr;
                 }
                 ByteCode::Jump(dest) => {
                     self.frame.ip = dest - 1; // to make room for iterating
@@ -599,7 +643,7 @@ impl VM {
                     let val = self.pop();
                     let idx = self.pop_int("invalid index")?;
                     let ptr = self.pop();
-                    if let Object::Array(arr) = self.get_obj_mut(ptr) {
+                    if let Object::Array(arr) = self.get_obj_mut(ptr)? {
                         if !(0 <= idx && (idx as usize) < arr.items.len()) {
                             return Err(self.s_error("index out of bounds"));
                         }
@@ -609,7 +653,20 @@ impl VM {
                     }
                     self.push(val);
                 }
-                ByteCode::Struct(base_ptr) => {
+                ByteCode::LStruct(idx) => {
+                    let base_ptr = self.stack[self.frame.stack_offset + idx];
+                    if let Object::Struct(base) = self.get_obj(base_ptr) {
+                        let mut data: Vec<Object> = 
+                            (0..base.fields.len()).map(|_| self.pop_obj()).collect();
+                        data.reverse();
+                        let le_struct = StructAlive{ base: base_ptr, data };
+                        self.push_obj(Object::StructAlive(le_struct));
+                    } else {
+                        unreachable!()
+                    }
+                }
+                ByteCode::GStruct(idx) => {
+                    let base_ptr = self.globals[idx];
                     if let Object::Struct(base) = self.get_obj(base_ptr) {
                         let mut data: Vec<Object> = 
                             (0..base.fields.len()).map(|_| self.pop_obj()).collect();

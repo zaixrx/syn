@@ -40,11 +40,18 @@ pub struct Compiler {
 
 struct Global {
     token: TokenHeader,
+    type_info: Option<TypeInfo>,
 }
 
 struct Local {
     token: TokenHeader,
     scope_depth: usize,
+    type_info: Option<TypeInfo>,
+}
+
+#[derive(Debug)]
+enum TypeInfo {
+    Struct(Struct),
 }
 
 struct LoopState {
@@ -364,10 +371,10 @@ impl Compiler {
     fn compile_let(&mut self) -> Result<(), CompilerError> {
         self.expect(Token::Identifer, "expected identifer")?;
         let byte = if self.scope_depth > 0 {
-            self.push_local()?;
+            self.push_local(None)?;
             ByteCode::LDef
         } else {
-            self.push_global()?;
+            self.push_global(None)?;
             ByteCode::GDef
         };
         if self.check(Token::Equal)? {
@@ -385,11 +392,11 @@ impl Compiler {
             return Err(self.error("can't have nested functions"));
         }
         self.expect(Token::Identifer, "expected the function's name")?;
-        self.push_global()?;
+        self.push_global(None)?;
         let func = self.compile_func_body(self.curr.lexm.clone())?;
         match self
             .prog
-            .chunk_load_const(0, Object::Function(func), self.curr.clone())
+            .chunk_load_obj(0, Object::Function(func), self.curr.clone())
         {
             Ok(idx) => idx,
             Err(err) => return Err(self.error(err)),
@@ -437,7 +444,7 @@ impl Compiler {
                 self.expect(Token::Comma, "expected ',' param seperator")?;
             }
             self.expect(Token::Identifer, "expected param name")?;
-            self.push_local()?; // TODO: typecheck
+            self.push_local(None)?; // TODO: typecheck
             self.expect(Token::Colon, "expected ':' param type seperator")?;
             self.compile_type()?;
             count += 1;
@@ -448,7 +455,7 @@ impl Compiler {
 
     fn compile_struct(&mut self) -> Result<(), CompilerError> {
         self.expect(Token::Identifer, "expected struct name")?;
-        let name = self.curr.lexm.clone();
+        let tok = self.curr.clone();
         self.expect(Token::LeftBrace, "expected '{'")?;
         let mut fields = std::collections::HashMap::new();
         while !self.check_with_eof(Token::RightBrace)? {
@@ -462,9 +469,21 @@ impl Compiler {
         if self.curr.tokn != Token::RightBrace {
             return Err(self.error("expected '}'"));
         }
-        let le_struct = Struct{ name: name.clone(), fields };
-        let ptr = self.load_obj(Object::Struct(le_struct))?;
-        self.get_chunk()?.structs.insert(name, ptr);
+        let temp = self.curr.clone();
+        {
+            let le_struct = Struct{ name: tok.lexm.clone(), fields };
+            self.curr = tok;
+            let byte = if self.scope_depth > 0 {
+                self.push_local(Some(TypeInfo::Struct(le_struct.clone())))?;
+                ByteCode::LDef
+            } else {
+                self.push_global(Some(TypeInfo::Struct(le_struct.clone())))?;
+                ByteCode::GDef
+            };
+            self.load_readonly_obj(Object::Struct(le_struct))?;
+            self.push_bytecode(byte)?;
+        }
+        self.curr = temp;
         Ok(())
     }
 
@@ -669,6 +688,16 @@ impl Compiler {
                 if can_assign && self.check(Token::Equal)? {
                     self.expression()?;
                     self.push_bytecode(ByteCode::LSet(idx))?;
+                } else if self.check(Token::LeftBrace)? {
+                    let le_struct = match &self.globals[idx].type_info {
+                        Some(TypeInfo::Struct(le_struct)) => le_struct.clone(),
+                        None => return Err(self.error("expected struct declaration"))
+                    };
+                    for _ in 0..le_struct.fields.len() {
+                        self.expression()?;
+                    }
+                    self.expect(Token::RightBrace, "expected '}'")?;
+                    self.push_bytecode(ByteCode::LStruct(idx))?;
                 } else {
                     self.push_bytecode(ByteCode::LGet(idx))?;
                 }
@@ -678,6 +707,16 @@ impl Compiler {
                     if can_assign && self.check(Token::Equal)? {
                         self.expression()?;
                         self.push_bytecode(ByteCode::GSet(idx))?;
+                    } else if self.check(Token::LeftBrace)? {
+                        let le_struct = match &self.globals[idx].type_info {
+                            Some(TypeInfo::Struct(le_struct)) => le_struct.clone(),
+                            None => return Err(self.error("expected struct declaration"))
+                        };
+                        for _ in 0..le_struct.fields.len() {
+                            self.expression()?;
+                        }
+                        self.expect(Token::RightBrace, "expected '}'")?;
+                        self.push_bytecode(ByteCode::GStruct(idx))?;
                     } else {
                         self.push_bytecode(ByteCode::GGet(idx))?;
                     }
@@ -824,14 +863,20 @@ impl Compiler {
         Ok(self.prog.chunks[self.chunk.unwrap() as usize].count())
     }
 
+
+    fn load_readonly_obj(&mut self, o: Object) -> Result<ObjPointer, CompilerError> {
+        // NOTE: or_default is a stupid hack 
+        self.prog.chunk_load_readonly_obj(self.chunk.unwrap_or_default(), o, self.curr.clone()).map_err(|err| {
+            self.error(err)
+        })
+    }
+
     #[inline]
     fn load_obj(&mut self, o: Object) -> Result<ObjPointer, CompilerError> {
-        // NOTE: or_default is a stupid idea
-        let fc = self.chunk.unwrap_or_default();
-        match self.prog.chunk_load_const(fc, o, self.curr.clone()) {
-            Ok(idx) => Ok((fc, idx)),
-            Err(msg) => Err(self.error(msg)),
-        }
+        // NOTE: or_default is a stupid hack 
+        self.prog.chunk_load_obj(self.chunk.unwrap_or_default(), o, self.curr.clone()).map_err(|err| {
+            self.error(err)
+        })
     }
 }
 
@@ -854,7 +899,7 @@ impl Compiler {
         Ok(())
     }
 
-    fn push_global(&mut self) -> Result<(), CompilerError> {
+    fn push_global(&mut self, type_info: Option<TypeInfo>) -> Result<(), CompilerError> {
         if self.globals.len() > GlobalCounter::MAX as usize {
             return Err(self.error("exceeded maximum number of global bindings."));
         }
@@ -867,6 +912,7 @@ impl Compiler {
         }
         self.globals.push(Global {
             token: self.curr.clone(),
+            type_info,
         });
         Ok(())
     }
@@ -881,7 +927,7 @@ impl Compiler {
     }
 
     // requires identifier to be parsed
-    fn push_local(&mut self) -> Result<(), CompilerError> {
+    fn push_local(&mut self, type_info: Option<TypeInfo>) -> Result<(), CompilerError> {
         if self.locals.len() > LocalCounter::MAX as usize {
             return Err(self.error("exceeded maximum number of local bindings."));
         }
@@ -898,6 +944,7 @@ impl Compiler {
         self.locals.push(Local {
             token: self.curr.clone(),
             scope_depth: self.scope_depth,
+            type_info
         });
         Ok(())
     }
