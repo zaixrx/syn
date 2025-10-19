@@ -175,6 +175,8 @@ pub enum ByteCode {
 
     LStruct(LocalCounter),
     GStruct(GlobalCounter),
+    FieldGet,
+    FieldSet,
 
     Ret,
 }
@@ -240,12 +242,13 @@ impl Object {
                 format!("Struct<{}>", typ.name)
             }
             Object::StructAlive(val) => {
-                if let Object::Struct(base) = prog.get_obj(val.base) {
-                    let mut s = format!("{} {{\n", base.name);
-                    for (key, val) in &val.data {
-                        s = format!("{s}{key: >tab$}: {}\n", val.to_string(prog, tab_lvl+1), tab=(tab_lvl+1)*4);
-                    }
-                    format!("{s}}}")
+                if let Object::Struct(_base) = prog.get_obj(val.base) {
+                    format!("TODO: my friend")
+                    // let mut s = format!("{} {{\n", base.name);
+                    // for (key, val) in &val.data {
+                    //     s = format!("{s}{key: >tab$}: {}\n", val.to_string(prog, tab_lvl+1), tab=(tab_lvl+1)*4);
+                    // }
+                    // format!("{s}}}")
                 } else {
                     unreachable!()
                 }
@@ -269,7 +272,7 @@ pub struct StructMember(pub Type);
 #[derive(Clone, PartialEq, Debug)]
 pub struct StructAlive {
     pub base: ObjPointer,
-    pub data: HashMap<String, Object>
+    pub data: HashMap<String, ObjPointer> // TODO: have a list of pointer instead
 }
 
 #[derive(Debug, Clone)]
@@ -661,6 +664,41 @@ impl VM {
                     let base_ptr = self.globals[idx];
                     self.push_struct(base_ptr);
                 }
+                ByteCode::FieldGet => {
+                    let field_name = match self.pop_obj() {
+                        Object::String(name) => name,
+                        _ => unreachable!()
+                    };
+                    let le_struct = self.pop_obj();
+                    if let Object::StructAlive(le_struct) = le_struct {
+                        if let Some(ptr) = le_struct.data.get(&field_name) {
+                            self.push(ptr.clone());
+                        } else {
+                            return Err(self.error(
+                                    // TODO: log struct name too
+                                    format!("field {} doesn't exist", field_name)
+                            ));
+                        }
+                    }
+                }
+                ByteCode::FieldSet => {
+                    let val = self.pop();
+                    let field_name = match self.pop_obj() {
+                        Object::String(name) => name,
+                        _ => unreachable!()
+                    };
+                    if let Object::StructAlive(mut le_struct) = self.pop_obj() {
+                        if let Some(field) = le_struct.data.get_mut(&field_name) {
+                            *field = val;
+                        } else {
+                            return Err(self.error(
+                                    // TODO: log struct name too
+                                    format!("field {} doesn't exist", field_name)
+                            ));
+                        }
+                    }
+                    self.push(val);
+                }
             }
             self.frame.ip += 1;
             // println!("stack: {:?}", self.stack);
@@ -676,7 +714,7 @@ impl VM {
         let mut data = HashMap::new();
         for _ in 0..base.fields.len() {
             if let Object::String(k) = self.pop_obj() {
-                let v = self.pop_obj();
+                let v = self.pop();
                 data.insert(k, v);
             } else {
                 unreachable!();

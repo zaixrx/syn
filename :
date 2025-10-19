@@ -267,8 +267,8 @@ impl Compiler {
     fn get_rule(&self, tok: Token) -> Rule {
         match tok {
             Token::Dot => Rule {
-                prefix: None,
-                infix: Some(Compiler::field),
+                prefix: Some(Compiler::field),
+                infix: None,
                 prec: Precedence::Call
             },
             Token::LeftBracket => Rule {
@@ -755,16 +755,8 @@ impl Compiler {
         Ok(())
     }
 
-    fn field(&mut self, can_assign: bool) -> Result<(), CompilerError> {
-        self.expect(Token::Identifer, "exepeted field name")?;
-        self.load_obj(Object::String(self.curr.lexm.clone()))?;
-        if can_assign && self.check(Token::Equal)? {
-            self.expression()?;
-            self.push_bytecode(ByteCode::FieldSet)?;
-        } else {
-            self.push_bytecode(ByteCode::FieldGet)?;
-        }
-        Ok(())
+    fn dot(&mut self, can_assign: bool) -> Result<(), CompilerError> {
+        self.expect(Token::Identifer, "exepeted field name")?:
     }
 
     fn array(&mut self, _: bool) -> Result<(), CompilerError> {
@@ -1116,7 +1108,7 @@ impl std::fmt::Display for CompilerError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
             f,
-            "ERROR at {}-{}: {} at `{}`",
+            "at {}-{}: {} at {}",
             self.line, self.coln, self.mssg, self.lexm
         )
     }
