@@ -1,0 +1,16 @@
+struct Vector2 {
+	x: Integer,
+	y: Integer,
+}
+
+func vec_dot(v1: Vector2, v2: Vector2) -> Vector2 {
+	return Vector2 {
+		x: v1.x * v2.x,
+		y: v1.y * v2.y,
+	};
+}
+
+func main() {
+	let v1 = Vector2 { x: 420, y: 3 };
+	let v2 = Vector2 { x: 69, y: -2 };
+}
