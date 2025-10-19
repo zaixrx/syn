@@ -242,13 +242,13 @@ impl Object {
                 format!("Struct<{}>", typ.name)
             }
             Object::StructAlive(val) => {
-                if let Object::Struct(_base) = prog.get_obj(val.base) {
-                    format!("TODO: my friend")
-                    // let mut s = format!("{} {{\n", base.name);
-                    // for (key, val) in &val.data {
-                    //     s = format!("{s}{key: >tab$}: {}\n", val.to_string(prog, tab_lvl+1), tab=(tab_lvl+1)*4);
-                    // }
-                    // format!("{s}}}")
+                if let Object::Struct(base) = prog.get_obj(val.base) {
+                    let mut s = format!("{} {{\n", base.name);
+                    for (key, val) in &val.data {
+                        let obj = prog.get_obj(val.clone());
+                        s = format!("{s}{key: >tab$}: {}\n", obj.to_string(prog, tab_lvl+1), tab=(tab_lvl+1)*4);
+                    }
+                    format!("{s}}}")
                 } else {
                     unreachable!()
                 }
