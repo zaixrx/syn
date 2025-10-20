@@ -1,0 +1,37 @@
+struct f_Vector2 {
+	x: Float, 
+	y: Float,
+}
+
+f_Vector2 :: {
+	func new() -> f_Vector2 {
+		return f_Vector2 { x: 0, y: 0 };
+	}
+}
+
+struct Player {
+	position: f_Vector2,
+	speed: Float,
+}
+
+Player :: {
+	func new(speed: Float) -> Player {
+		return Player {
+			speed: speed,
+			position: f_Vector2::new()
+		};
+	}
+	
+	func move(self) {
+		self.position.x = self.position.x + speed;
+		self.position.y = self.position.y + speed;
+	}
+}
+
+func main() {
+	let player = Player::new();
+
+	println("player position before: {}", player.position);
+	player.move();
+	println("player position after: {}", player.position);
+}

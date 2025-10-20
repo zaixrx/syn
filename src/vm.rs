@@ -408,6 +408,7 @@ impl VM {
     }
 
     #[inline]
+    // BEWARE: this clones the value but doesn't get it's reference
     // delete the const out of the chunk
     fn pop_obj(&mut self) -> Object {
         let ptr = self.pop();
@@ -584,7 +585,8 @@ impl VM {
                     }
                 }
                 ByteCode::Call(args_c) => {
-                    let args = (0..args_c).map(|_| self.pop()).rev().collect::<Vec<ObjPointer>>();
+                    let mut args = (0..args_c).map(|_| self.pop()).collect::<Vec<ObjPointer>>();
+                    args.reverse();
                     // TODO: move call validation to compile-time so that you only need to store
                     // the function's pointer in the CallFrame and get rid of the chunk pointers
                     let obj = self.pop_obj();
@@ -687,7 +689,8 @@ impl VM {
                         Object::String(name) => name,
                         _ => unreachable!()
                     };
-                    if let Object::StructAlive(mut le_struct) = self.pop_obj() {
+                    let le_struct_ptr = self.pop();
+                    if let Object::StructAlive(le_struct) = self.get_obj_mut(le_struct_ptr)? {
                         if let Some(field) = le_struct.data.get_mut(&field_name) {
                             *field = val;
                         } else {

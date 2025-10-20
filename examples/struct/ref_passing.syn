@@ -1,0 +1,16 @@
+struct Vector2 {
+	x: Integer,
+	y: Integer,
+}
+
+func vec_set(v1: Vector2, val: Integer) {
+	v1.x = val;
+	v1.y = val;
+}
+
+func main() {
+	let v1 = Vector2 { x: 420, y: 3 };
+	println("before: {}", v1);
+	vec_set(v1, 0);
+	println("after: {}", v1);
+}
