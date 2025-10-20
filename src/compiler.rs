@@ -1,3 +1,7 @@
+// TODO: for structs build up a symbol table so that you don't need to interact with strings
+// and use offsets in le struct to access things like fields and methods with additional
+// type-safety
+
 use std::collections::HashSet;
 
 use crate::lexer::{
@@ -7,7 +11,7 @@ use crate::lexer::{
 };
 
 use crate::vm::{
-    ArgsCounter, ByteCode, Chunk, Func, FuncCounter, GlobalCounter, InstPtr, LocalCounter, ObjPointer, Object, Program, Struct, StructMember, Type
+    ArgsCounter, ByteCode, Chunk, Func, FuncCounter, GlobalCounter, InstPtr, LocalCounter, ObjPointer, Object, Program, Struct, StructMember, Type, MethodCounter
 };
 
 pub struct Compiler {
@@ -20,6 +24,7 @@ pub struct Compiler {
     globals: Vec<Global>,
     locals: Vec<Local>,
     scope_depth: usize,
+
     loop_state: LoopState,
 
     had_error: bool,
@@ -89,7 +94,12 @@ impl Compiler {
             globals: Vec::new(),
             locals: Vec::new(),
             scope_depth: 0,
-            loop_state: LoopState::new(),
+
+            loop_state: LoopState {
+                start: 0,
+                in_loop: false,
+                break_jumps: Vec::new()
+            },
 
             had_error: false,
             panic_mode: false,
@@ -180,6 +190,30 @@ impl Compiler {
                 self.compile_struct()?;
                 self.declarative_mode = false;
             }
+            Token::Impl => {
+                self.declarative_mode = true;
+                self.next()?;
+                self.expect(Token::Identifer, "expected struct name")?;
+
+                let base_ptr = match self.resolve_global(&self.curr.lexm) {
+                    Some(base_ptr) => base_ptr,
+                    None => return Err(self.error("undefined struct"))
+                };
+                self.expect(Token::LeftBrace, "expected '{'")?;
+                let mut methods_count = 0;
+                while self.check(Token::Func)? {
+                    if methods_count == MethodCounter::MAX {
+                        return Err(self.error("reached max methods count in a struct"));
+                    }
+                    self.compile_method()?;
+                    methods_count += 1;
+                }
+                self.expect(Token::RightBrace, "expected '}'")?;
+                self.push_bytecode(ByteCode::GGet(base_ptr))?;
+                self.push_bytecode(ByteCode::StructImpl(methods_count))?;
+
+                self.declarative_mode = false;
+            }
             _ => {
                 return self.statement();
             }
@@ -266,6 +300,11 @@ impl Compiler {
 
     fn get_rule(&self, tok: Token) -> Rule {
         match tok {
+            Token::ScopeRes => Rule {
+                prefix: None,
+                infix: Some(Compiler::method),
+                prec: Precedence::Call
+            },
             Token::Dot => Rule {
                 prefix: None,
                 infix: Some(Compiler::field),
@@ -381,17 +420,26 @@ impl Compiler {
         Ok(())
     }
 
+    fn compile_method(&mut self) -> Result<(), CompilerError> {
+        self.expect(Token::Identifer, "expected the method's name")?;
+        let token = self.curr.clone();
+        let func = self.compile_func_body(token.lexm.clone())?;
+        match self.prog.chunk_load_obj(0, Object::Function(func), token) {
+            Ok(idx) => idx,
+            Err(err) => return Err(self.error(err)),
+        };
+        Ok(())
+    }
+
     fn compile_func(&mut self) -> Result<(), CompilerError> {
         if self.chunk.is_some() {
             return Err(self.error("can't have nested functions"));
         }
         self.expect(Token::Identifer, "expected the function's name")?;
+        let token = self.curr.clone();
         self.push_global(None)?;
-        let func = self.compile_func_body(self.curr.lexm.clone())?;
-        match self
-            .prog
-            .chunk_load_obj(0, Object::Function(func), self.curr.clone())
-        {
+        let func = self.compile_func_body(token.lexm.clone())?;
+        match self.prog.chunk_load_obj(0, Object::Function(func), token) {
             Ok(idx) => idx,
             Err(err) => return Err(self.error(err)),
         };
@@ -454,10 +502,9 @@ impl Compiler {
         let mut fields = std::collections::HashMap::new();
         while !self.check_with_eof(Token::RightBrace)? {
             self.expect(Token::Identifer, "expected struct member name")?;
-            let member_name = self.curr.lexm.clone();
+            let field_name = self.curr.lexm.clone();
             self.expect(Token::Colon, "expected ':' as a type seperator")?;
-            let member_type = StructMember(self.compile_type()?);
-            fields.insert(member_name, member_type);
+            fields.insert(field_name, StructMember::Field{typ: self.compile_type()?});
             self.check(Token::Comma)?;
         }
         if self.curr.tokn != Token::RightBrace {
@@ -723,18 +770,18 @@ impl Compiler {
                         let mut set = HashSet::new();
                         for _ in 0..base.fields.len() {
                             self.expect(Token::Identifer, "expected member name")?;
-                            if base.fields.get(&self.curr.lexm).is_none() {
+                            let name = self.curr.lexm.clone();
+                            if base.fields.get(&name).is_none() {
                                 return Err(self.error("undefined member in struct"));
                             }
-                            if set.contains(&self.curr.lexm) {
+                            if set.contains(&name) {
                                 return Err(self.error("already defined field"));
                             } 
-                            let name = self.curr.lexm.clone();
                             self.expect(Token::Colon, "expected ':'")?;
                             self.expression()?;
                             self.check(Token::Comma)?;
-                            self.load_obj(Object::String(name.clone()))?;
-                            set.insert(name);
+                            set.insert(name.clone());
+                            self.load_obj(Object::String(name))?;
                         }
                         self.expect(Token::RightBrace, "expected '}'")?;
                         self.push_bytecode(ByteCode::GStruct(idx))?;
@@ -752,6 +799,14 @@ impl Compiler {
     fn group(&mut self, _: bool) -> Result<(), CompilerError> {
         self.expression()?;
         self.expect(Token::RightParen, "expected enclosing ')'")?;
+        Ok(())
+    }
+
+    // NOTE: for now it's only specific to `static` methods
+    fn method(&mut self, _: bool) -> Result<(), CompilerError> {
+        self.expect(Token::Identifer, "exepeted method name")?;
+        self.load_obj(Object::String(self.curr.lexm.clone()))?;
+        self.push_bytecode(ByteCode::MethodGet)?;
         Ok(())
     }
 
@@ -1059,14 +1114,6 @@ impl Compiler {
 }
 
 impl LoopState {
-    fn new() -> Self {
-        Self {
-            start: 0,
-            in_loop: false,
-            break_jumps: Vec::new(),
-        }
-    }
-
     fn start_loop(&mut self, start: usize) {
         self.in_loop = true;
         self.start = start;

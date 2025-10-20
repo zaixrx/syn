@@ -132,7 +132,8 @@ impl Chunk {
     pub fn get_obj_mut(&mut self, idx: ObjCounter) -> Result<&mut Object, &'static str> {
         match &mut self.objs[idx as usize] {
             Classifer::Raw(obj) => Ok(obj),
-            Classifer::Readonly(_) => Err("failed to mutate")
+            Classifer::Readonly(obj) => Ok(obj),
+            // Classifer::Readonly(_) => Err("failed to mutate")
         }
     }
 }
@@ -175,8 +176,10 @@ pub enum ByteCode {
 
     LStruct(LocalCounter),
     GStruct(GlobalCounter),
+    MethodGet,
     FieldGet,
     FieldSet,
+    StructImpl(MethodCounter),
 
     Ret,
 }
@@ -267,7 +270,10 @@ pub struct Struct {
 }
 
 #[derive(Clone, PartialEq, Debug)]
-pub struct StructMember(pub Type);
+pub enum StructMember {
+    Field { typ: Type },
+    Method { ptr: ObjPointer },
+}
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct StructAlive {
@@ -424,7 +430,7 @@ impl VM {
 
     pub fn exec(mut self) -> Result<(), VMError> {
         while self.frame.ip < self.prog.chunks[self.frame.func.chunk as usize].count() {
-            // self.prog.chunk_disassemble_one(self.frame.func.chunk, self.frame.ip);
+            self.prog.chunk_disassemble_one(self.frame.func.chunk, self.frame.ip);
             let byte = self.prog.chunks[self.frame.func.chunk as usize].code[self.frame.ip];
             match byte {
                 ByteCode::Push(i) => {
@@ -666,6 +672,32 @@ impl VM {
                     let base_ptr = self.globals[idx];
                     self.push_struct(base_ptr);
                 }
+                ByteCode::MethodGet => {
+                    let method_name = match self.pop_obj() {
+                        Object::String(name) => name,
+                        _ => unreachable!()
+                    };
+                    let obj = self.pop_obj();
+                    let base = match obj {
+                        Object::StructAlive(le_struct) => {
+                            if let Object::Struct(base) = self.get_obj(le_struct.base) {
+                                base
+                            } else {
+                                unreachable!()
+                            }
+                        },
+                        Object::Struct(ref base) => base,
+                        _ => unreachable!(),
+                    };
+                    if let Some(StructMember::Method { ptr }) = base.fields.get(&method_name) {
+                        println!("{:?} -> {:?}", ptr, self.get_obj(*ptr));
+                        self.push(ptr.clone());
+                    } else {
+                        return Err(self.error(
+                                format!("invalid method reference in `struct {}`", base.name)
+                        ));
+                    }
+                }
                 ByteCode::FieldGet => {
                     let field_name = match self.pop_obj() {
                         Object::String(name) => name,
@@ -701,6 +733,22 @@ impl VM {
                         }
                     }
                     self.push(val);
+                }
+                ByteCode::StructImpl(methods_count) => {
+                    let base = self.pop();
+                    for _ in 0..methods_count {
+                        let method_ptr = self.pop();
+                        let method_name = match self.get_obj(method_ptr) {
+                            Object::Function(le_method) => le_method.name.clone(),
+                            _ => unreachable!()
+                        };
+                        // TODO: this is awful
+                        if let Object::Struct(base) = self.get_obj_mut(base)? {
+                            base.fields.insert(method_name, StructMember::Method { ptr: method_ptr });
+                        } else {
+                            unreachable!();
+                        }
+                    }
                 }
             }
             self.frame.ip += 1;
@@ -773,6 +821,7 @@ pub type FuncCounter = u32;
 pub type ArgsCounter = u8;
 pub type LocalCounter = usize;
 pub type GlobalCounter = usize;
+pub type MethodCounter = u8;
 pub type InstPtr = usize;
 
 #[derive(Debug)]

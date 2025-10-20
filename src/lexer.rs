@@ -24,6 +24,8 @@ pub enum Token {
     RightParen,
     LeftBrace,
     RightBrace,
+    ScopeRes,
+    Impl,
     Colon,
     SemiColon,
     Comma,
@@ -184,7 +186,6 @@ impl Lexer {
             }
         };
         let tok = match c {
-            '.' => Token::Dot,
             '[' => Token::LeftBracket,
             ']' => Token::RightBracket,
             '(' => Token::LeftParen,
@@ -253,7 +254,13 @@ impl Lexer {
                     return Err(LexerError::new("there is no '|' operator", self));
                 }
             }
-            ':' => Token::Colon,
+            ':' => {
+                if self.match_char(':') {
+                    Token::ScopeRes
+                } else {
+                    Token::Colon
+                }
+            },
             ',' => Token::Comma,
             c if c.is_ascii_digit() => {
                 self.curr -= 1;
@@ -293,6 +300,7 @@ impl Lexer {
                     "return" => Token::Return,
                     "func" => Token::Func,
                     "struct" => Token::Struct,
+                    "impl" => Token::Impl,
                     "Int" => Token::IntT,
                     "Float" => Token::FloatT,
                     "Str" => Token::StrT,
