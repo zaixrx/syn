@@ -1,0 +1,10 @@
+func method(self) { }
+
+struct Struct {}
+
+impl Struct {
+	func method_1(self, self) {}
+	func method_2(a: Int, self) {}
+}
+
+func main() {}

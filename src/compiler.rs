@@ -1,6 +1,9 @@
 // TODO: for structs build up a symbol table so that you don't need to interact with strings
 // and use offsets in le struct to access things like fields and methods with additional
 // type-safety
+//
+// TODO: replace the error returing with error reporting because each compiler method can produce
+// more than one error for readability
 
 use std::collections::HashSet;
 
@@ -26,6 +29,7 @@ pub struct Compiler {
     scope_depth: usize,
 
     loop_state: LoopState,
+    impl_state: bool,
 
     had_error: bool,
     had_sync_err: bool,
@@ -101,6 +105,7 @@ impl Compiler {
                 in_loop: false,
                 break_jumps: Vec::new()
             },
+            impl_state: false,
 
             had_error: false,
             panic_mode: false,
@@ -205,6 +210,7 @@ impl Compiler {
             }
             Token::Impl => {
                 self.declarative_mode = true;
+                self.impl_state = true;
                 self.next()?;
                 self.expect(Token::Identifer, "expected struct name")?;
                 let base_ptr = match self.resolve_global(&self.curr.lexm) {
@@ -223,6 +229,7 @@ impl Compiler {
                 self.expect(Token::RightBrace, "expected '}'")?;
                 self.push_bytecode(ByteCode::GGet(base_ptr))?;
                 self.push_bytecode(ByteCode::StructImpl(methods_count))?;
+                self.impl_state = false;
                 self.declarative_mode = false;
             }
             _ => {
@@ -328,7 +335,7 @@ impl Compiler {
                 infix: Some(Compiler::call),
                 prec: Precedence::Call,
             },
-            Token::Identifer => Rule {
+            Token::LeSelf | Token::Identifer => Rule {
                 prefix: Some(Compiler::identifer),
                 infix: None,
                 prec: Precedence::Primary,
@@ -456,7 +463,7 @@ impl Compiler {
             Ok(idx) => Some(idx),
             Err(msg) => return Err(self.error(msg))
         };
-        let arity = self.compile_params()?;
+        let (arity, is_method) = self.compile_params()?;
         let retype = if self.check(Token::RightArrow)? {
             self.compile_type()?
         } else {
@@ -475,12 +482,21 @@ impl Compiler {
         self.push_bytecode(ByteCode::Ret)?;
         self.end_scope()?;
         let chunk = self.chunk.take().unwrap();
-        Ok(Func { name, arity, retype, chunk })
+        Ok(Func { name, arity, retype, chunk, is_method })
     }
 
-    fn compile_params(&mut self) -> Result<usize, CompilerError> {
+    fn compile_params(&mut self) -> Result<(usize, bool), CompilerError> {
         let mut count = 0;
+        let mut is_method = false;
         self.expect(Token::LeftParen, "expected disclosing '('")?;
+        if self.check(Token::LeSelf)? {
+            count += 1;
+            if !self.impl_state {
+                return Err(self.error("can't declare a method outside `impl` block"));
+            }
+            self.push_local(None)?; // TODO: typecheck
+            is_method = true;
+        }
         loop {
             let curr = self.peek()?.tokn;
             if curr == Token::RightParen || curr == Token::EOF {
@@ -489,6 +505,13 @@ impl Compiler {
             if count > 0 {
                 self.expect(Token::Comma, "expected ',' param seperator")?;
             }
+            if self.check(Token::LeSelf)? {
+                // TODO: report both if possible
+                if is_method {
+                    return Err(self.error("can't have more than one 'self' for a method"));
+                }
+                return Err(self.error("self should be the first parameter in the method"));
+            }
             self.expect(Token::Identifer, "expected param name")?;
             self.push_local(None)?; // TODO: typecheck
             self.expect(Token::Colon, "expected ':' param type seperator")?;
@@ -496,7 +519,7 @@ impl Compiler {
             count += 1;
         }
         self.expect(Token::RightParen, "expected enclosing ')'")?;
-        Ok(count)
+        Ok((count, is_method))
     }
 
     fn compile_struct(&mut self) -> Result<(), CompilerError> {

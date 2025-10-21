@@ -5,7 +5,7 @@ struct f_Vector2 {
 
 impl f_Vector2 {
 	func new() -> f_Vector2 {
-		return f_Vector2 { x: 0, y: 0 };
+		return f_Vector2 { x: 0.0, y: 0.0 };
 	}
 }
 
@@ -22,16 +22,16 @@ impl Player {
 		};
 	}
 	
-	func move(self: Self) {
-		self.position.x = self.position.x + speed;
-		self.position.y = self.position.y + speed;
+	func move(self) {
+		println("hello world");
+		self.position.x = 1;
+		// self.position.x = self.position.x + self.speed;
+		// self.position.y = self.position.y + self.speed;
 	}
 }
 
 func main() {
-	let speed = 1.0;
-	let player = Player::new(speed);
-
+	let player = Player::new(1.0);
 	println("player position before: {}", player.position);
 	player.move();
 	println("player position after: {}", player.position);

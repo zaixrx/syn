@@ -83,7 +83,7 @@ impl Program {
             self.chunk_disassemble(fc as FuncCounter);
             println!();
         }
-        println!("== PROG_START ==");
+        println!("== PROG_END ==");
     }
 }
 
@@ -198,6 +198,7 @@ pub enum Object {
     String(String),
     Array(Array),
     Function(Func),
+    Method(Method),
     Struct(Struct),
     StructAlive(StructAlive),
     Nil,
@@ -227,6 +228,11 @@ impl Object {
             }
             Object::Function(val) => {
                 format!("Func<{}>", val.name)
+            }
+            Object::Method(Method { func, owner }) => {
+                let s1 = prog.get_obj(*func).to_string(prog, tab_lvl);
+                let s2 = prog.get_obj(*owner).to_string(prog, tab_lvl);
+                format!("Method<{}, {}>", s1, s2)
             }
             Object::Array(val) => {
                 let mut s = String::from("[");
@@ -298,7 +304,7 @@ impl Struct {
 #[derive(Clone, PartialEq, Debug)]
 pub enum StructMember {
     Field { typ: Type },
-    Method { ptr: ObjPointer },
+    Method { ptr: ObjPointer }, // points to the function
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -313,6 +319,7 @@ pub struct Func {
     pub name: String,
     pub retype: Type,
     pub chunk: FuncCounter,
+    pub is_method: bool,
 }
 
 impl PartialEq for Func {
@@ -328,8 +335,15 @@ impl Func {
             chunk: 0,
             retype: Type::None,
             name: String::new(),
+            is_method: false,
         }
     }
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct Method {
+    func: ObjPointer,
+    owner: ObjPointer, // points to `self`
 }
 
 #[derive(Clone)]
@@ -456,7 +470,7 @@ impl VM {
 
     pub fn exec(mut self) -> Result<(), VMError> {
         while self.frame.ip < self.prog.chunks[self.frame.func.chunk as usize].count() {
-            // self.prog.chunk_disassemble_one(self.frame.func.chunk, self.frame.ip);
+            self.prog.chunk_disassemble_one(self.frame.func.chunk, self.frame.ip);
             let byte = self.prog.chunks[self.frame.func.chunk as usize].code[self.frame.ip];
             match byte {
                 ByteCode::Push(i) => {
@@ -622,25 +636,48 @@ impl VM {
                     // TODO: move call validation to compile-time so that you only need to store
                     // the function's pointer in the CallFrame and get rid of the chunk pointers
                     let obj = self.pop_obj();
-                    if let Object::Function(func) = obj {
-                        // TODO: typecheck args types also
-                        if func.arity != args_c as usize {
-                            return Err(
-                                self.error(
-                                    format!("expected {} args got {}", func.arity, args_c)
-                                )
-                            );
+                    match obj {
+                        Object::Function(func) => {
+                            if func.arity != args_c as usize {
+                                return Err(
+                                    self.error(
+                                        format!("expected {} args got {}", func.arity, args_c)
+                                    )
+                                );
+                            }
+                            self.push_func(self.frame.clone());
+                            self.frame.ip = 0;
+                            self.frame.stack_offset = self.stack.len();
+                            for arg in args {
+                                self.push(arg);
+                            }
+                            self.frame.func = func;
+                            continue;
                         }
-                        self.push_func(self.frame.clone());
-                        self.frame.ip = 0;
-                        self.frame.func = func;
-                        self.frame.stack_offset = self.stack.len();
-                        for arg in args {
-                            self.push(arg);
+                        Object::Method(method) => {
+                            let func = match self.get_obj(method.func) {
+                                Object::Function(func) => func.clone(),
+                                _ => unreachable!()
+                            };
+                            if func.arity != (args_c as usize) + 1 {
+                                return Err(
+                                    self.error(
+                                        format!("expected {} args got {}", func.arity - 1, args_c)
+                                    )
+                                );
+                            }
+                            self.push_func(self.frame.clone());
+                            self.frame.ip = 0;
+                            self.frame.stack_offset = self.stack.len();
+                            self.push(method.owner); // push `self`
+                            for arg in args {
+                                self.push(arg);
+                            }
+                            self.frame.func = func;
                         }
-                        continue;
-                    } else {
-                        return Err(self.s_error("invalid call target"));
+                        _ => {
+                            return Err(self.s_error("invalid call target"));
+                        }
                     }
                 }
                 ByteCode::Ret => { // don't `continue;`
@@ -703,25 +740,17 @@ impl VM {
                         Object::String(name) => name,
                         _ => unreachable!()
                     };
-                    let obj = self.pop_obj();
-                    let base = match obj {
-                        Object::StructAlive(le_struct) => {
-                            if let Object::Struct(base) = self.get_obj(le_struct.base) {
-                                base
-                            } else {
-                                unreachable!()
-                            }
-                        },
-                        Object::Struct(ref base) => base,
-                        _ => unreachable!(),
-                    };
-                    if let Some(StructMember::Method { ptr }) = base.members.get(&method_name) {
-                        // println!("{:?} -> {:?}", ptr, self.get_obj(*ptr));
-                        self.push(ptr.clone());
+                    if let Object::Struct(base) = self.pop_obj() {
+                        if let Some(StructMember::Method { ptr }) = base.members.get(&method_name) { 
+                            // println!("{:?} -> {:?}", ptr, self.get_obj(*ptr));
+                            self.push(ptr.clone());
+                        } else {
+                            return Err(self.error(
+                                    format!("invalid method reference in `struct {}`", base.name)
+                            ));
+                        }
                     } else {
-                        return Err(self.error(
-                                format!("invalid method reference in `struct {}`", base.name)
-                        ));
+                        unreachable!()
                     }
                 }
                 ByteCode::FieldGet => {
@@ -729,16 +758,33 @@ impl VM {
                         Object::String(name) => name,
                         _ => unreachable!()
                     };
-                    let le_struct = self.pop_obj();
-                    if let Object::StructAlive(le_struct) = le_struct {
-                        if let Some(ptr) = le_struct.data.get(&field_name) {
-                            self.push(ptr.clone());
-                        } else {
-                            return Err(self.error(
-                                    // TODO: log struct name too
-                                    format!("field {} doesn't exist", field_name)
-                            ));
-                        }
+                    let le_struct_ptr = self.pop();
+                    match self.get_obj(le_struct_ptr) {
+                        Object::StructAlive(le_struct) => {
+                            // println!("{:?}", match self.get_obj(le_struct.base) {
+                            //     Object::Struct(le_base) => le_base,
+                            //     _ => unreachable!()
+                            // });
+                            println!("{:?}", le_struct);
+                            // if it's a field
+                            if let Some(ptr) = le_struct.data.get(&field_name) {
+                                self.push(*ptr);
+                            } 
+                            // else if it's a method
+                            else if let Some(StructMember::Method { ptr }) = self.must_get_struct_mut(le_struct.base)?.members.get(&field_name) {
+                                let method = Method {
+                                    owner: le_struct_ptr,
+                                    func: *ptr,
+                                };
+                                self.push_obj(Object::Method(method));
+                            } else {
+                                return Err(self.error(
+                                        // TODO: log struct name too
+                                        format!("field {} doesn't exist", field_name)
+                                ))
+                            }
+                        },
+                        _ => unreachable!("expected struct instance")
                     }
                 }
                 ByteCode::FieldSet => {
@@ -781,6 +827,13 @@ impl VM {
             // println!("stack: {:?}", self.stack);
         }
         return Ok(());
+    }
+
+    fn must_get_struct_mut(&mut self, ptr: ObjPointer) -> Result<&mut Struct, VMError> {
+        match self.get_obj_mut(ptr)? {
+            Object::Struct(le_base) => Ok(le_base),
+            _ => unreachable!()
+        }
     }
 
     fn push_struct(&mut self, base_ptr: ObjPointer) {

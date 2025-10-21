@@ -18,6 +18,7 @@ pub struct TokenHeader {
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum Token {
     Dot,
+    LeSelf,
     LeftBracket,
     RightBracket,
     LeftParen,
@@ -186,6 +187,7 @@ impl Lexer {
             }
         };
         let tok = match c {
+            '.' => Token::Dot,
             '[' => Token::LeftBracket,
             ']' => Token::RightBracket,
             '(' => Token::LeftParen,
@@ -301,6 +303,7 @@ impl Lexer {
                     "func" => Token::Func,
                     "struct" => Token::Struct,
                     "impl" => Token::Impl,
+                    "self" => Token::LeSelf,
                     "Int" => Token::IntT,
                     "Float" => Token::FloatT,
                     "Str" => Token::StrT,
