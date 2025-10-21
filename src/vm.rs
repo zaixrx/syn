@@ -470,7 +470,7 @@ impl VM {
 
     pub fn exec(mut self) -> Result<(), VMError> {
         while self.frame.ip < self.prog.chunks[self.frame.func.chunk as usize].count() {
-            self.prog.chunk_disassemble_one(self.frame.func.chunk, self.frame.ip);
+            // self.prog.chunk_disassemble_one(self.frame.func.chunk, self.frame.ip);
             let byte = self.prog.chunks[self.frame.func.chunk as usize].code[self.frame.ip];
             match byte {
                 ByteCode::Push(i) => {
@@ -674,6 +674,7 @@ impl VM {
                                 self.push(arg);
                             }
                             self.frame.func = func;
+                            continue;
                         }
                         _ => {
                             return Err(self.s_error("invalid call target"));
@@ -742,7 +743,6 @@ impl VM {
                     };
                     if let Object::Struct(base) = self.pop_obj() {
                         if let Some(StructMember::Method { ptr }) = base.members.get(&method_name) { 
-                            // println!("{:?} -> {:?}", ptr, self.get_obj(*ptr));
                             self.push(ptr.clone());
                         } else {
                             return Err(self.error(
@@ -761,11 +761,6 @@ impl VM {
                     let le_struct_ptr = self.pop();
                     match self.get_obj(le_struct_ptr) {
                         Object::StructAlive(le_struct) => {
-                            // println!("{:?}", match self.get_obj(le_struct.base) {
-                            //     Object::Struct(le_base) => le_base,
-                            //     _ => unreachable!()
-                            // });
-                            println!("{:?}", le_struct);
                             // if it's a field
                             if let Some(ptr) = le_struct.data.get(&field_name) {
                                 self.push(*ptr);

@@ -23,10 +23,8 @@ impl Player {
 	}
 	
 	func move(self) {
-		println("hello world");
-		self.position.x = 1;
-		// self.position.x = self.position.x + self.speed;
-		// self.position.y = self.position.y + self.speed;
+		self.position.x = self.position.x + self.speed;
+		self.position.y = self.position.y + self.speed;
 	}
 }
 

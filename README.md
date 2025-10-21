@@ -4,6 +4,45 @@ programming language that runs on a stack-based synVM with it's own runtime
 providing (hopefully) garabage collection and JIT compilation
 
 ```
+struct f_Vector2 {
+	x: Float, 
+	y: Float,
+}
+
+impl f_Vector2 {
+	func new() -> f_Vector2 {
+		return f_Vector2 { x: 0.0, y: 0.0 };
+	}
+}
+
+struct Player {
+	position: f_Vector2,
+	speed: Float,
+}
+
+impl Player {
+	func new(speed: Float) -> Player {
+		return Player {
+			speed: speed,
+			position: f_Vector2::new(),
+		};
+	}
+	
+	func move(self) {
+		self.position.x = self.position.x + self.speed;
+		self.position.y = self.position.y + self.speed;
+	}
+}
+
+func main() {
+	let player = Player::new(1.0);
+	println("player position before: {}", player.position);
+	player.move();
+	println("player position after: {}", player.position);
+}
+```
+
+```
 // syn is statically typed
 func fib(n: Int) -> Int {
     if n <= 1 {
