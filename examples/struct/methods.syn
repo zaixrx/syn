@@ -22,15 +22,17 @@ impl Player {
 		};
 	}
 	
-	// func move(self: Self) {
-	// 	self.position.x = self.position.x + speed;
-	// 	self.position.y = self.position.y + speed;
-	// }
+	func move(self: Self) {
+		self.position.x = self.position.x + speed;
+		self.position.y = self.position.y + speed;
+	}
 }
 
 func main() {
-	let player = Player::new();
-	// println("player position before: {}", player.position);
-	// player.move();
-	// println("player position after: {}", player.position);
+	let speed = 1.0;
+	let player = Player::new(speed);
+
+	println("player position before: {}", player.position);
+	player.move();
+	println("player position after: {}", player.position);
 }

@@ -266,7 +266,33 @@ impl Object {
 #[derive(Clone, PartialEq, Debug)]
 pub struct Struct {
     pub name: String,
-    pub fields: HashMap<String, StructMember>,
+    pub members: HashMap<String, StructMember>,
+    fields_count: usize,
+    methods_count: usize,
+}
+
+impl Struct {
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            fields_count: 0,
+            methods_count: 0,
+            members: HashMap::new(),
+        }
+    }
+
+    pub fn add_member(&mut self, name: String, member: StructMember) {
+        match member {
+            StructMember::Field { .. } => {
+                self.fields_count += 1;
+                self.members.insert(name, member)
+            },
+            StructMember::Method { .. } => {
+                self.methods_count += 1;
+                self.members.insert(name, member)
+            }
+        };
+    }
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -430,7 +456,7 @@ impl VM {
 
     pub fn exec(mut self) -> Result<(), VMError> {
         while self.frame.ip < self.prog.chunks[self.frame.func.chunk as usize].count() {
-            self.prog.chunk_disassemble_one(self.frame.func.chunk, self.frame.ip);
+            // self.prog.chunk_disassemble_one(self.frame.func.chunk, self.frame.ip);
             let byte = self.prog.chunks[self.frame.func.chunk as usize].code[self.frame.ip];
             match byte {
                 ByteCode::Push(i) => {
@@ -689,8 +715,8 @@ impl VM {
                         Object::Struct(ref base) => base,
                         _ => unreachable!(),
                     };
-                    if let Some(StructMember::Method { ptr }) = base.fields.get(&method_name) {
-                        println!("{:?} -> {:?}", ptr, self.get_obj(*ptr));
+                    if let Some(StructMember::Method { ptr }) = base.members.get(&method_name) {
+                        // println!("{:?} -> {:?}", ptr, self.get_obj(*ptr));
                         self.push(ptr.clone());
                     } else {
                         return Err(self.error(
@@ -735,7 +761,7 @@ impl VM {
                     self.push(val);
                 }
                 ByteCode::StructImpl(methods_count) => {
-                    let base = self.pop();
+                    let base_ptr = self.pop();
                     for _ in 0..methods_count {
                         let method_ptr = self.pop();
                         let method_name = match self.get_obj(method_ptr) {
@@ -743,8 +769,8 @@ impl VM {
                             _ => unreachable!()
                         };
                         // TODO: this is awful
-                        if let Object::Struct(base) = self.get_obj_mut(base)? {
-                            base.fields.insert(method_name, StructMember::Method { ptr: method_ptr });
+                        if let Object::Struct(base) = self.get_obj_mut(base_ptr)? {
+                            base.add_member(method_name, StructMember::Method { ptr: method_ptr });
                         } else {
                             unreachable!();
                         }
@@ -763,7 +789,7 @@ impl VM {
             _ => unreachable!()
         };
         let mut data = HashMap::new();
-        for _ in 0..base.fields.len() {
+        for _ in 0..base.fields_count {
             if let Object::String(k) = self.pop_obj() {
                 let v = self.pop();
                 data.insert(k, v);

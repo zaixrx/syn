@@ -28,6 +28,7 @@ pub struct Compiler {
     loop_state: LoopState,
 
     had_error: bool,
+    had_sync_err: bool,
     panic_mode: bool,
     declarative_mode: bool, // used to prevent non-declarative top level code -- for structure
 }
@@ -104,12 +105,16 @@ impl Compiler {
             had_error: false,
             panic_mode: false,
             declarative_mode: false,
+            had_sync_err: false,
         }
     }
 
     pub fn compile(mut self) -> Result<Program, Vec<CompilerError>> {
         let mut errs = Vec::new();
         loop {
+            if self.had_sync_err {
+                break;
+            }
             match self.declaration() {
                 Ok(_) => (),
                 Err(err) => {
@@ -138,31 +143,36 @@ impl Compiler {
         }
     }
 
-    fn synchronize(&mut self) -> bool {
+    // synchronize until:
+    // end of file
+    // the start of a new statement (func, impl, struct, while, if, ...)
+    // end of a statement (;)
+    fn synchronize(&mut self) {
         self.panic_mode = false;
-        let mut prev;
         loop {
             if self.curr.tokn == Token::EOF {
-                return true;
+                return;
             }
-            prev = match self.peek() {
+            let next = match self.peek() {
                 Ok(t) => t.tokn,
-                Err(_) => return false,
+                Err(_) => return { self.had_sync_err = true; },
             };
-            match prev {
-                Token::Func
-                | Token::Let
-                | Token::If
-                | Token::While
-                | Token::Print
-                | Token::Return => return true,
+            match next {
+                Token::Impl |
+                Token::Struct |
+                Token::Func |
+                Token::Let |
+                Token::If |
+                Token::While |
+                Token::Print |
+                Token::Return => return,
                 _ => (),
             };
             if self.next().is_err() {
-                return false;
+                return { self.had_sync_err = true; };
             };
-            if prev == Token::SemiColon {
-                return true;
+            if next == Token::SemiColon {
+                return;
             }
         }
     }
@@ -171,6 +181,9 @@ impl Compiler {
 // grammar agnostic methods
 impl Compiler {
     fn declaration(&mut self) -> Result<(), CompilerError> {
+        if self.panic_mode {
+            self.synchronize();
+        }
         match self.peek()?.tokn {
             Token::Let => {
                 self.declarative_mode = true;
@@ -194,7 +207,6 @@ impl Compiler {
                 self.declarative_mode = true;
                 self.next()?;
                 self.expect(Token::Identifer, "expected struct name")?;
-
                 let base_ptr = match self.resolve_global(&self.curr.lexm) {
                     Some(base_ptr) => base_ptr,
                     None => return Err(self.error("undefined struct"))
@@ -211,16 +223,12 @@ impl Compiler {
                 self.expect(Token::RightBrace, "expected '}'")?;
                 self.push_bytecode(ByteCode::GGet(base_ptr))?;
                 self.push_bytecode(ByteCode::StructImpl(methods_count))?;
-
                 self.declarative_mode = false;
             }
             _ => {
                 return self.statement();
             }
         };
-        if self.panic_mode {
-            self.synchronize();
-        }
         Ok(())
     }
 
@@ -272,9 +280,9 @@ impl Compiler {
 
     fn parse_precedence(&mut self, precedence: Precedence) -> Result<(), CompilerError> {
         self.next()?;
+        let can_assign = precedence <= Precedence::Assignment;
         match self.get_rule(self.curr.tokn).prefix {
             Some(prefix) => {
-                let can_assign = precedence <= Precedence::Assignment;
                 prefix(self, can_assign)?;
                 loop {
                     let infix_tok = self.peek()?;
@@ -420,15 +428,10 @@ impl Compiler {
         Ok(())
     }
 
-    fn compile_method(&mut self) -> Result<(), CompilerError> {
+    fn compile_method(&mut self) -> Result<ObjPointer, CompilerError> {
         self.expect(Token::Identifer, "expected the method's name")?;
-        let token = self.curr.clone();
-        let func = self.compile_func_body(token.lexm.clone())?;
-        match self.prog.chunk_load_obj(0, Object::Function(func), token) {
-            Ok(idx) => idx,
-            Err(err) => return Err(self.error(err)),
-        };
-        Ok(())
+        let func = self.compile_func_body(self.curr.lexm.clone())?;
+        self.load_obj(Object::Function(func))
     }
 
     fn compile_func(&mut self) -> Result<(), CompilerError> {
@@ -471,7 +474,8 @@ impl Compiler {
         self.load_obj(Object::Nil)?;
         self.push_bytecode(ByteCode::Ret)?;
         self.end_scope()?;
-        Ok(Func { name, arity, retype, chunk: self.chunk.take().unwrap() })
+        let chunk = self.chunk.take().unwrap();
+        Ok(Func { name, arity, retype, chunk })
     }
 
     fn compile_params(&mut self) -> Result<usize, CompilerError> {
@@ -497,23 +501,24 @@ impl Compiler {
 
     fn compile_struct(&mut self) -> Result<(), CompilerError> {
         self.expect(Token::Identifer, "expected struct name")?;
-        let tok = self.curr.clone();
-        self.expect(Token::LeftBrace, "expected '{'")?;
-        let mut fields = std::collections::HashMap::new();
-        while !self.check_with_eof(Token::RightBrace)? {
-            self.expect(Token::Identifer, "expected struct member name")?;
-            let field_name = self.curr.lexm.clone();
-            self.expect(Token::Colon, "expected ':' as a type seperator")?;
-            fields.insert(field_name, StructMember::Field{typ: self.compile_type()?});
-            self.check(Token::Comma)?;
-        }
-        if self.curr.tokn != Token::RightBrace {
-            return Err(self.error("expected '}'"));
+        let mut le_struct = Struct::new(self.curr.lexm.clone());
+        let rollback = self.curr.clone();
+        {
+            self.expect(Token::LeftBrace, "expected '{'")?;
+            while !self.check_with_eof(Token::RightBrace)? {
+                self.expect(Token::Identifer, "expected struct member name")?;
+                let field_name = self.curr.lexm.clone();
+                self.expect(Token::Colon, "expected ':' as a type seperator")?;
+                le_struct.add_member(field_name, StructMember::Field{typ: self.compile_type()?});
+                self.check(Token::Comma)?;
+            }
+            if self.curr.tokn != Token::RightBrace {
+                return Err(self.error("expected '}'"));
+            }
         }
         let temp = self.curr.clone();
+        self.curr = rollback;
         {
-            let le_struct = Struct{ name: tok.lexm.clone(), fields };
-            self.curr = tok;
             let byte = if self.scope_depth > 0 {
                 self.push_local(Some(TypeInfo::Struct(le_struct.clone())))?;
                 ByteCode::LDef
@@ -723,6 +728,7 @@ impl Compiler {
         Ok(())
     }
 
+    // does a lookup for the current identifer from the ineer most scope to the global scope
     fn identifer(&mut self, can_assign: bool) -> Result<(), CompilerError> {
         let name = self.curr.lexm.clone();
         match self.resolve_local(name.as_str()) {
@@ -736,9 +742,9 @@ impl Compiler {
                         None => return Err(self.error("expected struct declaration"))
                     };
                     let mut set = HashSet::new();
-                    for _ in 0..base.fields.len() {
+                    for _ in 0..base.members.len() {
                         self.expect(Token::Identifer, "expected member name")?;
-                        if base.fields.get(&self.curr.lexm).is_none() {
+                        if base.members.get(&self.curr.lexm).is_none() {
                             return Err(self.error("undefined member in struct"));
                         }
                         if set.contains(&self.curr.lexm) {
@@ -768,10 +774,10 @@ impl Compiler {
                             None => return Err(self.error("expected struct declaration"))
                         };
                         let mut set = HashSet::new();
-                        for _ in 0..base.fields.len() {
+                        for _ in 0..base.members.len() {
                             self.expect(Token::Identifer, "expected member name")?;
                             let name = self.curr.lexm.clone();
-                            if base.fields.get(&name).is_none() {
+                            if base.members.get(&name).is_none() {
                                 return Err(self.error("undefined member in struct"));
                             }
                             if set.contains(&name) {
