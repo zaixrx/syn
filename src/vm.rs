@@ -313,6 +313,7 @@ pub struct StructAlive {
     pub data: HashMap<String, ObjPointer> // TODO: have a list of pointer instead
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Func {
     pub arity: usize,

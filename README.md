@@ -71,10 +71,15 @@ func main() {
 
 # Resources
 
-Writing Interpreters In Rust: https://rust-hosted-langs.github.io/book/chapter-interp-vm-design.html
+1) Crafting Interpreters: "https://craftinginterpreters.com/"
 
-Crafting Interpreters: https://craftinginterpreters.com/
+2) The Dragon Book: "https://en.wikipedia.org/wiki/Compilers:_Principles,_Techniques,_and_Tools"
 
-Pratt Parsing(Operator-precedence parser): https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html
+3) The Rust Programming Languge(Book): "https://doc.rust-lang.org/stable/book/"
 
-Performance in Rust: https://nnethercote.github.io/perf-book/
+3) Pratt Parsing(Operator-precedence parser): "https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html/"
+
+4) Writing Interpreters In Rust: "https://rust-hosted-langs.github.io/book/chapter-interp-vm-design.html/"
+
+5) Performance in Rust: "https://nnethercote.github.io/perf-book/"
+
