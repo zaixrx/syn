@@ -81,5 +81,6 @@ func main() {
 
 4) Writing Interpreters In Rust: "https://rust-hosted-langs.github.io/book/chapter-interp-vm-design.html/"
 
-5) Performance in Rust: "https://nnethercote.github.io/perf-book/"
+5) Garbage Collection: "https://blog.pnkfx.org/blog/categories/gc/"
 
+6) Performance in Rust: "https://nnethercote.github.io/perf-book/"
