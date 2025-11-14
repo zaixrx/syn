@@ -1,5 +1,5 @@
 # Syn Programming Language
-sen (c in arabic) is a statically typed C-inspired hobby
+syn (c in arabic) is a statically typed C-inspired hobby
 programming language that runs on a stack-based synVM with it's own runtime
 providing (hopefully) garabage collection and JIT compilation
 
