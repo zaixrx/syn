@@ -1,4 +1,6 @@
-#[derive(Debug)]
+use serde::{Serialize, Deserialize};
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Lexer {
     src: String,
     line: usize,
@@ -7,7 +9,7 @@ pub struct Lexer {
     start: usize,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct TokenHeader {
     pub tokn: Token,
     pub coln: usize,
@@ -15,7 +17,7 @@ pub struct TokenHeader {
     pub lexm: String,
 }
 
-#[derive(Debug, PartialEq, Copy, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Copy, Clone)]
 pub enum Token {
     Dot,
     LeSelf,

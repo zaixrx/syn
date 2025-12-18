@@ -1,4 +1,6 @@
+use std::io;
 use std::{collections::HashMap, fmt::Debug};
+use serde::{Serialize, Deserialize};
 
 use crate::lexer::TokenHeader;
 
@@ -10,6 +12,7 @@ pub struct VM {
     call_stack: Vec<CallFrame>
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct Program {
     pub chunks: Vec<Chunk>,
 }
@@ -85,9 +88,19 @@ impl Program {
         }
         println!("== PROG_END ==");
     }
+
+    pub fn write_to_file(&self, filepath: String) -> std::io::Result<()> { 
+        let buf = postcard::to_stdvec(&self).map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+        std::fs::write(filepath, buf)
+    }
+
+    pub fn read_from_file(filepath: String) -> std::io::Result<Program> {
+        let bytes = std::fs::read(filepath)?;
+        postcard::from_bytes(&bytes).map_err(|err| io::Error::new(io::ErrorKind::Other, err))
+    }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Chunk {
     pub objs: Vec<Classifer<Object>>,
     code: Vec<ByteCode>,
@@ -139,7 +152,7 @@ impl Chunk {
 }
 
 #[repr(u8)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone)]
 pub enum ByteCode {
     Push(ObjPointer),
     Pop,
@@ -184,13 +197,13 @@ pub enum ByteCode {
     Ret,
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, Debug)]
 pub enum Classifer<T> {
     Raw(T),
     Readonly(T),
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub enum Object {
     Integer(i32),
     Float(f64),
@@ -269,7 +282,7 @@ impl Object {
     }
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct Struct {
     pub name: String,
     pub members: HashMap<String, StructMember>,
@@ -301,20 +314,20 @@ impl Struct {
     }
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub enum StructMember {
     Field { typ: Type },
     Method { ptr: ObjPointer }, // points to the function
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct StructAlive {
     pub base: ObjPointer,
     pub data: HashMap<String, ObjPointer> // TODO: have a list of pointer instead
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Func {
     pub arity: usize,
     pub name: String,
@@ -341,7 +354,7 @@ impl Func {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct Method {
     func: ObjPointer,
     owner: ObjPointer, // points to `self`
@@ -355,7 +368,7 @@ pub struct CallFrame {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Array {
     pub typ: Type,
     pub items: Vec<ObjPointer>,
@@ -373,7 +386,7 @@ impl PartialEq for Array {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum Type {
     Integer,
     Float,
