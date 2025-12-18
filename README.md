@@ -46,9 +46,9 @@ func main() {
 // syn is statically typed
 func fib(n: Int) -> Int {
     if n <= 1 {
-        return 1;
+        return n;
     }
-    let a = 1;
+    let a = 0;
     let b = 1;
     while n > 0 {
         a = a + b;
