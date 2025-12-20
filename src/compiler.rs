@@ -340,6 +340,16 @@ impl Compiler {
                 infix: None,
                 prec: Precedence::Primary,
             },
+            Token::Panic => Rule {
+                prefix: Some(Compiler::panic),
+                infix: None,
+                prec: Precedence::Primary,
+            },
+            Token::Assert => Rule {
+                prefix: Some(Compiler::assert),
+                infix: None,
+                prec: Precedence::Primary,
+            },
             Token::Int(_) => Rule {
                 prefix: Some(Compiler::literal),
                 infix: None,
@@ -751,13 +761,52 @@ impl Compiler {
         Ok(())
     }
 
+    fn check_for_assign(&mut self) -> Result<bool, CompilerError> {
+        let token = self.peek()?;
+        match token.tokn {
+            Token::Equal => {
+                self.next()?;
+                self.expression()?;
+                Ok(true)
+            },
+            Token::PlusEqual => {
+                self.identifer(false)?;
+                self.next()?; // skip opreator
+                self.expression()?;
+                self.push_bytecode(ByteCode::Add)?;
+                Ok(true)
+            },
+            Token::MinusEqual => {
+                self.identifer(false)?;
+                self.next()?; // skip opreator
+                self.expression()?;
+                self.push_bytecode(ByteCode::Sub)?;
+                Ok(true)
+            },
+            Token::StarEqual => {
+                self.identifer(false)?;
+                self.next()?; // skip opreator
+                self.expression()?;
+                self.push_bytecode(ByteCode::Mul)?;
+                Ok(true)
+            },
+            Token::SlashEqual => {
+                self.identifer(false)?;
+                self.next()?; // skip opreator
+                self.expression()?;
+                self.push_bytecode(ByteCode::Div)?;
+                Ok(true)
+            },
+            _ => Ok(false)
+        }
+    }
+
     // does a lookup for the current identifer from the ineer most scope to the global scope
     fn identifer(&mut self, can_assign: bool) -> Result<(), CompilerError> {
         let name = self.curr.lexm.clone();
         match self.resolve_local(name.as_str()) {
             Some(idx) => {
-                if can_assign && self.check(Token::Equal)? {
-                    self.expression()?;
+                if can_assign && self.check_for_assign()? {
                     self.push_bytecode(ByteCode::LSet(idx))?;
                 } else if self.check(Token::LeftBrace)? {
                     let base = match &self.locals[idx].type_info {
@@ -788,8 +837,7 @@ impl Compiler {
             }
             None => {
                 if let Some(idx) = self.resolve_global(self.curr.lexm.as_str()) {
-                    if can_assign && self.check(Token::Equal)? {
-                        self.expression()?;
+                    if can_assign && self.check_for_assign()? { 
                         self.push_bytecode(ByteCode::GSet(idx))?;
                     } else if self.check(Token::LeftBrace)? {
                         let base = match &self.globals[idx].type_info {
@@ -825,6 +873,18 @@ impl Compiler {
         Ok(())
     }
 
+    fn panic(&mut self, _: bool) -> Result<(), CompilerError> {
+        self.expression()?;
+        self.push_bytecode(ByteCode::Panic)?;
+        Ok(())
+    }
+
+    fn assert(&mut self, _: bool) -> Result<(), CompilerError> {
+        self.expression()?;
+        self.push_bytecode(ByteCode::Assert)?;
+        Ok(())
+    }
+
     fn group(&mut self, _: bool) -> Result<(), CompilerError> {
         self.expression()?;
         self.expect(Token::RightParen, "expected enclosing ')'")?;
@@ -842,8 +902,7 @@ impl Compiler {
     fn field(&mut self, can_assign: bool) -> Result<(), CompilerError> {
         self.expect(Token::Identifer, "exepeted field name")?;
         self.load_obj(Object::String(self.curr.lexm.clone()))?;
-        if can_assign && self.check(Token::Equal)? {
-            self.expression()?;
+        if can_assign && self.check_for_assign()? {
             self.push_bytecode(ByteCode::FieldSet)?;
         } else {
             self.push_bytecode(ByteCode::FieldGet)?;
@@ -872,8 +931,7 @@ impl Compiler {
     fn index(&mut self, can_assign: bool) -> Result<(), CompilerError> {
         self.expression()?;
         self.expect(Token::RightBracket, "expected enclosing ']'")?;
-        if can_assign && self.check(Token::Equal)? {
-            self.expression()?;
+        if can_assign && self.check_for_assign()? {
             self.push_bytecode(ByteCode::ArraySet)?;
         } else {
             self.push_bytecode(ByteCode::ArrayGet)?;

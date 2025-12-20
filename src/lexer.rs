@@ -34,9 +34,13 @@ pub enum Token {
     Comma,
 
     Minus,
+    MinusEqual,
     Slash,
+    SlashEqual,
     Plus,
+    PlusEqual,
     Star,
+    StarEqual,
 
     And,
     Or,
@@ -73,6 +77,9 @@ pub enum Token {
     BoolT,
     FuncT,
     RightArrow,
+
+    Panic,
+    Assert,
 
     EOF,
 }
@@ -200,6 +207,8 @@ impl Lexer {
             '-' => {
                 if self.match_char('>') {
                     Token::RightArrow
+                } else if self.match_char('=') {
+                    Token::MinusEqual
                 } else {
                     Token::Minus
                 }
@@ -210,12 +219,26 @@ impl Lexer {
                         .find('\n')
                         .unwrap_or_else(|| self.src.len() - (self.curr + 1));
                     return self.next();
+                } else if self.match_char('=') {
+                    Token::SlashEqual
                 } else {
                     Token::Slash
                 }
             }
-            '+' => Token::Plus,
-            '*' => Token::Star,
+            '+' => {
+                if self.match_char('=') {
+                    Token::PlusEqual
+                } else {
+                    Token::Plus
+                }
+            },
+            '*' => {
+                if self.match_char('=') {
+                    Token::StarEqual
+                } else {
+                    Token::Star
+                }
+            },
             '=' => {
                 if self.match_char('=') {
                     Token::EqualEqual
@@ -311,6 +334,8 @@ impl Lexer {
                     "Str" => Token::StrT,
                     "Bool" => Token::BoolT,
                     "Func" => Token::FuncT,
+                    "panic" => Token::Panic,
+                    "assert" => Token::Assert,
                     _ => Token::Identifer,
                 }
             }

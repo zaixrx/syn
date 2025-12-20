@@ -149,6 +149,10 @@ impl Chunk {
             // Classifer::Readonly(_) => Err("failed to mutate")
         }
     }
+
+    pub fn get_string_at_line(&self, _: usize) -> &str {
+        "TODO: get_string_at_line"
+    }
 }
 
 #[repr(u8)]
@@ -193,6 +197,9 @@ pub enum ByteCode {
     FieldGet,
     FieldSet,
     StructImpl(MethodCounter),
+
+    Assert,
+    Panic,
 
     Ret,
 }
@@ -830,6 +837,18 @@ impl VM {
                             unreachable!();
                         }
                     }
+                }
+                ByteCode::Assert => {
+                    if !self.peek_obj(0).clone().to_bool() {
+                        let chunk = &self.prog.chunks[self.frame.func.chunk as usize];
+                        let msg = chunk.get_string_at_line(chunk.info[self.frame.ip].line);
+                        println!("RUNETIME PANIC: {}", msg);
+                        std::process::exit(69);
+                    }
+                }
+                ByteCode::Panic => {
+                    println!("RUNETIME PANIC: {}", self.pop_obj().to_string(&self.prog, 0));
+                    std::process::exit(69);
                 }
             }
             self.frame.ip += 1;

@@ -18,7 +18,9 @@ struct Args {
     #[arg(short, long, default_value="false")]
     bytecode: bool,
     
-    #[arg(short, long, default_value="true")]
+    // TODO: handle cache invalidtion
+    // make sure that cache maps to the right TU
+    #[arg(short, long, default_value="false")]
     cache: bool,
 }
 
