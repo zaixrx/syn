@@ -32,7 +32,8 @@ pub struct Compiler {
     impl_state: bool,
 
     had_error: bool,
-    had_sync_err: bool,
+    had_sync_err: bool, // TODO: had an error in the synchronization process... to prevent infinite loops
+
     panic_mode: bool,
     declarative_mode: bool, // used to prevent non-declarative top level code -- for structure
 }
@@ -65,6 +66,9 @@ enum Precedence {
     Assignment,
     Or,
     And,
+    LogicalOr,
+    XOR,
+    LogicalAnd,
     Equality,
     Comparison,
     Term,
@@ -113,38 +117,31 @@ impl Compiler {
             had_sync_err: false,
         }
     }
-
-    pub fn compile(mut self) -> Result<Program, Vec<CompilerError>> {
-        let mut errs = Vec::new();
-        loop {
-            if self.had_sync_err {
-                break;
-            }
-            match self.declaration() {
-                Ok(_) => (),
-                Err(err) => {
-                    if !self.panic_mode {
-                        errs.push(err);
-                        self.had_error = true;
-                        self.panic_mode = true;
-                    }
+ 
+    pub fn compile<F>(mut self, mut report: F) -> Option<Program> 
+    where
+        F: FnMut(CompilerError),
+    {
+        while !self.had_sync_err {
+            self.declaration().unwrap_or_else(|err| {
+                if !self.panic_mode {
+                    report(err);
+                    self.had_error = true;
+                    self.panic_mode = true;
                 }
-            };
+            });
             if self.curr.tokn == Token::EOF {
                 break;
             }
         }
         if self.had_error {
-            Err(errs)
+            None
+        } else if let Some(idx) = self.resolve_global("main") {
+            self.prog.chunks[0].pushs(ByteCode::GGet(idx), ByteCode::Call(0), self.curr.clone());
+            Some(self.prog)
         } else {
-            if let Some(idx) = self.resolve_global("main") {
-                self.prog.chunks[0].pushs(ByteCode::GGet(idx), ByteCode::Call(0), self.curr.clone());
-            } else {
-                return Err(vec![
-                    self.error("consider adding `func main()` to your program"),
-                ]);
-            }
-            Ok(self.prog)
+            report(self.error("consider adding `func main()` to your program"));
+            None
         }
     }
 
@@ -390,7 +387,7 @@ impl Compiler {
                 infix: Some(Compiler::binary),
                 prec: Precedence::Term,
             },
-            Token::Slash | Token::Star => Rule {
+            Token::Percent | Token::Slash | Token::Star => Rule {
                 prefix: None,
                 infix: Some(Compiler::binary),
                 prec: Precedence::Factor,
@@ -399,6 +396,21 @@ impl Compiler {
                 prefix: None,
                 infix: Some(Compiler::binary),
                 prec: Precedence::Or,
+            },
+            Token::LogicalOr => Rule {
+                prefix: None,
+                infix: Some(Compiler::binary),
+                prec: Precedence::LogicalOr,
+            },
+            Token::LogicalAnd => Rule {
+                prefix: None,
+                infix: Some(Compiler::binary),
+                prec: Precedence::LogicalAnd,
+            },
+            Token::Caret => Rule {
+                prefix: None,
+                infix: Some(Compiler::binary),
+                prec: Precedence::XOR,
             },
             Token::And => Rule {
                 prefix: None,
@@ -568,6 +580,7 @@ impl Compiler {
 
     fn compile_type(&mut self) -> Result<Type, CompilerError> {
         let typ = match self.peek()?.tokn {
+            Token::ByteT => Type::Byte,
             Token::IntT => Type::Integer,
             Token::FloatT => Type::Float,
             Token::BoolT => Type::Bool,
@@ -797,6 +810,34 @@ impl Compiler {
                 self.push_bytecode(ByteCode::Div)?;
                 Ok(true)
             },
+            Token::LogicalOrEqual => {
+                self.identifer(false)?;
+                self.next()?; // skip opreator
+                self.expression()?;
+                self.push_bytecode(ByteCode::LogicalOr)?;
+                Ok(true)
+            },
+            Token::LogicalAndEqual => {
+                self.identifer(false)?;
+                self.next()?; // skip opreator
+                self.expression()?;
+                self.push_bytecode(ByteCode::LogicalAnd)?;
+                Ok(true)
+            },
+            Token::CaretEqual => {
+                self.identifer(false)?;
+                self.next()?; // skip opreator
+                self.expression()?;
+                self.push_bytecode(ByteCode::XOR)?;
+                Ok(true)
+            },
+            Token::PercentEqual => {
+                self.identifer(false)?;
+                self.next()?; // skip opreator
+                self.expression()?;
+                self.push_bytecode(ByteCode::Modulo)?;
+                Ok(true)
+            },
             _ => Ok(false)
         }
     }
@@ -989,6 +1030,10 @@ impl Compiler {
             Token::Less => self.push_bytecode(ByteCode::Less)?,
             Token::GreaterEqual => self.push_bytecodes(ByteCode::Less, ByteCode::Not)?,
             Token::LessEqual => self.push_bytecodes(ByteCode::Greater, ByteCode::Not)?,
+            Token::LogicalOr => self.push_bytecode(ByteCode::LogicalOr)?,
+            Token::Caret => self.push_bytecode(ByteCode::XOR)?,
+            Token::LogicalAnd => self.push_bytecode(ByteCode::LogicalAnd)?,
+            Token::Percent => self.push_bytecode(ByteCode::Modulo)?,
             _ => return Err(self.error("invalid binary operator")),
         };
         Ok(())

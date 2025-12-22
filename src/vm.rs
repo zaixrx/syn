@@ -89,12 +89,12 @@ impl Program {
         println!("== PROG_END ==");
     }
 
-    pub fn write_to_file(&self, filepath: String) -> std::io::Result<()> { 
+    pub fn write_to_file(&self, filepath: &str) -> std::io::Result<()> { 
         let buf = postcard::to_stdvec(&self).map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
         std::fs::write(filepath, buf)
     }
 
-    pub fn read_from_file(filepath: String) -> std::io::Result<Program> {
+    pub fn read_from_file(filepath: &str) -> std::io::Result<Program> {
         let bytes = std::fs::read(filepath)?;
         postcard::from_bytes(&bytes).map_err(|err| io::Error::new(io::ErrorKind::Other, err))
     }
@@ -173,6 +173,10 @@ pub enum ByteCode {
     Greater,
     Or,
     And,
+    XOR,
+    Modulo,
+    LogicalAnd,
+    LogicalOr,
 
     Print(ArgsCounter),
 
@@ -204,7 +208,7 @@ pub enum ByteCode {
     Ret,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub enum Classifer<T> {
     Raw(T),
     Readonly(T),
@@ -212,6 +216,7 @@ pub enum Classifer<T> {
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub enum Object {
+    Byte(u8),
     Integer(i32),
     Float(f64),
     Bool(bool),
@@ -234,17 +239,20 @@ impl Object {
 
     fn to_string(&self, prog: &Program, tab_lvl: usize) -> String {
         match self {
+            Object::Byte(val) => {
+                val.to_string()
+            }
             Object::Integer(val) => {
-                format!("{}", val)
+                val.to_string()
             }
             Object::Float(val) => {
-                format!("{}", val)
+                val.to_string()
             }
             Object::Bool(val) => {
-                format!("{}", val)
+                val.to_string()
             }
             Object::String(val) => {
-                format!("{}", val)
+                val.to_string()
             }
             Object::Function(val) => {
                 format!("Func<{}>", val.name)
@@ -395,6 +403,7 @@ impl PartialEq for Array {
 #[allow(dead_code)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum Type {
+    Byte,
     Integer,
     Float,
     Bool,
@@ -443,12 +452,8 @@ impl VM {
 
     #[inline]
     fn get_obj_mut(&mut self, ptr: ObjPointer) -> Result<&mut Object, VMError> {
-        let err = self.s_error("can't referece this mutably");
-        if let Ok(obj) = self.prog.get_obj_mut(ptr) {
-            Ok(obj)
-        } else {
-            Err(err)
-        }
+        let err = self.raw_error("invalid".into());
+        self.prog.get_obj_mut(ptr).map_err(|_| err)
     }
 
     #[inline]
@@ -460,20 +465,6 @@ impl VM {
         self.push((fc, oc))
     }
 
-    #[allow(dead_code)]
-    #[inline]
-    fn peek_obj(&self, lvl: usize) -> &Object {
-        let ptr = self.peek(lvl);
-        self.get_obj(ptr)
-    }
-
-    #[allow(dead_code)]
-    #[inline]
-    fn peek_obj_mut(&mut self, lvl: usize) -> Result<&mut Object, VMError> {
-        let ptr = self.peek(lvl);
-        self.get_obj_mut(ptr)
-    }
-
     #[inline]
     // BEWARE: this clones the value but doesn't get it's reference
     // delete the const out of the chunk
@@ -482,10 +473,15 @@ impl VM {
         self.get_obj(ptr).clone()
     }
 
-    fn must_op<T>(&self, r: Option<T>, msg: &'static str) -> Result<T, VMError> {
-        match r {
-            Some(v) => Ok(v),
-            None => Err(self.s_error(msg)),
+    fn peek_obj(&self, lvl: usize) -> &Object {
+        let ptr = self.peek(lvl);
+        self.get_obj(ptr)
+    }
+
+    fn must_op<T>(&self, a: Option<T>, msg: &'static str) -> Result<T, VMError> {
+        match a {
+            Some(val) => Ok(val),
+            None => self.error(msg.into()),
         }
     }
 
@@ -502,24 +498,29 @@ impl VM {
                 | ByteCode::Mul
                 | ByteCode::Div
                 | ByteCode::Less
-                | ByteCode::Greater => {
+                | ByteCode::Greater
+                | ByteCode::LogicalOr
+                | ByteCode::XOR 
+                | ByteCode::LogicalAnd 
+                | ByteCode::Modulo => {
                     let y = self.pop_obj();
                     let x = self.pop_obj();
-                    if let Object::Integer(x) = x
-                        && let Object::Integer(y) = y
-                    {
+                    if let Object::Integer(x) = x && let Object::Integer(y) = y {
                         let obj = match byte {
                             ByteCode::Add => Object::Integer(
-                                self.must_op(x.checked_add(y), "addition overflow")?,
+                                self.must_op(x.checked_add(y), "invalid addition")?,
                             ),
                             ByteCode::Sub => Object::Integer(
-                                self.must_op(x.checked_sub(y), "subtraction overflow")?,
+                                self.must_op(x.checked_sub(y), "invalid subtraction")?,
                             ),
                             ByteCode::Mul => Object::Integer(
-                                self.must_op(x.checked_mul(y), "multiplication overflow")?,
+                                self.must_op(x.checked_mul(y), "invalid multiplication")?,
                             ),
                             ByteCode::Div => Object::Integer(
-                                self.must_op(x.checked_div(y), "division overflow")?,
+                                self.must_op(x.checked_div(y), "invalid division")?,
+                            ),
+                            ByteCode::Modulo => Object::Integer(
+                                self.must_op(x.checked_rem_euclid(y), "invalid modulo")?
                             ),
                             ByteCode::Less => {
                                 Object::Bool(x < y)
@@ -527,16 +528,23 @@ impl VM {
                             ByteCode::Greater => {
                                 Object::Bool(x > y)
                             },
-                            _ => unreachable!(),
+                            ByteCode::LogicalOr => {
+                                Object::Integer(x | y)
+                            },
+                            ByteCode::XOR => {
+                                Object::Integer(x ^ y)
+                            },
+                            ByteCode::LogicalAnd => {
+                                Object::Integer(x & y)
+                            },
+                            _ => return self.error("invalid opreator on integer".into())
                         };
                         self.push_obj(obj);
-                    } else if let Object::Float(x) = x
-                        && let Object::Float(y) = y
-                    {
+                    } else if let Object::Float(x) = x && let Object::Float(y) = y {
                         let obj = match byte {
                             ByteCode::Add => Object::Float({
-                                let r = x + y;
-                                self.must_op(r.is_finite().then_some(r), "addition overflow")?
+                                let z = x + y;
+                                self.must_op(z.is_finite().then_some(z), "addition overflow")?
                             }),
                             ByteCode::Sub => Object::Float({
                                 let r = x - y;
@@ -550,31 +558,64 @@ impl VM {
                                 let r = x / y;
                                 self.must_op(r.is_finite().then_some(r), "division overflow")?
                             }),
+                            ByteCode::Modulo => Object::Float({
+                                let r = x.rem_euclid(y);
+                                self.must_op(r.is_finite().then_some(r), "invalid modulo")?
+                            }),
                             ByteCode::Less => {
                                 Object::Bool(x < y)
                             },
                             ByteCode::Greater => {
                                 Object::Bool(x > y)
                             },
-                            _ => unreachable!(),
+                            _ => return self.error("invalid operator on float".into())
                         };
                         self.push_obj(obj);
-                    } else if let Object::String(x) = x
-                        && let Object::String(y) = y
-                    {
+                    } else if let Object::Byte(x) = x && let Object::Byte(y) = y {
+                        let obj = match byte {
+                            ByteCode::Add => Object::Byte(
+                                self.must_op(x.checked_add(y), "invalid addition")?,
+                            ),
+                            ByteCode::Sub => Object::Byte(
+                                self.must_op(x.checked_sub(y), "invalid subtraction")?,
+                            ),
+                            ByteCode::Mul => Object::Byte(
+                                self.must_op(x.checked_mul(y), "invalid multiplication")?,
+                            ),
+                            ByteCode::Div => Object::Byte(
+                                self.must_op(x.checked_div(y), "invalid division")?,
+                            ),
+                            ByteCode::Modulo => Object::Byte(
+                                self.must_op(x.checked_rem_euclid(y), "invalid modulo")?
+                            ),
+                            ByteCode::Less => {
+                                Object::Bool(x < y)
+                            },
+                            ByteCode::Greater => {
+                                Object::Bool(x > y)
+                            },
+                            ByteCode::LogicalOr => {
+                                Object::Byte(x | y)
+                            },
+                            ByteCode::XOR => {
+                                Object::Byte(x ^ y)
+                            },
+                            ByteCode::LogicalAnd => {
+                                Object::Byte(x & y)
+                            },
+                            _ => return self.error("invalid opreator on byte".into())
+                        };
+                        self.push_obj(obj);
+                    } else if let Object::String(x) = x && let Object::String(y) = y {
                         let obj = match byte {
                             ByteCode::Add => {
                                 Object::String(String::from(x + y.as_str()))
                             }
-                            _ => return Err(self.s_error("you can only concatenate strings with '+'"))
+                            _ => return self.error("invalid operator on strings".into())
                         };
                         self.push_obj(obj);
                     } else {
-                        return Err(
-                            self.error(
-                                format!("invalid operands for {:?}", byte)
-                            )
-                        )
+                        return self.error(format!("invalid operands for {:?}", byte));
                     };
                 }
                 ByteCode::Print(count) => {
@@ -588,13 +629,16 @@ impl VM {
                     println!("{}", buffer);
                 }
                 ByteCode::Neg => {
-                    let x = self.pop_int("operand is required to be an integer")?;
-                    let obj = Object::Integer(-x);
+                    let obj = match self.pop_obj() {
+                        Object::Float(val) => Object::Float(-val),
+                        Object::Integer(val) => Object::Integer(-val),
+                        _ => return self.error("operand is required to be an integer".into())
+                    };
                     self.push_obj(obj);
                 }
                 ByteCode::Or | ByteCode::And => {
-                    let y = self.pop_bool("left operand is required to be a boolean")?;
-                    let x = self.pop_bool("right operand is require to be a boolean")?;
+                    let y = self.pop_bool("left operand is required to be a boolean".into())?;
+                    let x = self.pop_bool("right operand is require to be a boolean".into())?;
                     let obj = match byte {
                         ByteCode::Or => {
                             Object::Bool(x || y)
@@ -615,7 +659,7 @@ impl VM {
                     self.push_obj(obj);
                 }
                 ByteCode::Not => {
-                    let x = self.pop_bool("operand expected to be a boolean")?;
+                    let x = self.pop_bool("operand expected to be a boolean".into())?;
                     let obj = Object::Bool(!x);
                     self.push_obj(obj);
                 }
@@ -660,11 +704,7 @@ impl VM {
                     match obj {
                         Object::Function(func) => {
                             if func.arity != args_c as usize {
-                                return Err(
-                                    self.error(
-                                        format!("expected {} args got {}", func.arity, args_c)
-                                    )
-                                );
+                                return self.error(format!("expected {} args got {}", func.arity, args_c));
                             }
                             self.push_func(self.frame.clone());
                             self.frame.ip = 0;
@@ -681,11 +721,7 @@ impl VM {
                                 _ => unreachable!()
                             };
                             if func.arity != (args_c as usize) + 1 {
-                                return Err(
-                                    self.error(
-                                        format!("expected {} args got {}", func.arity - 1, args_c)
-                                    )
-                                );
+                                return self.error(format!("expected {} args got {}", func.arity - 1, args_c));
                             }
                             self.push_func(self.frame.clone());
                             self.frame.ip = 0;
@@ -698,7 +734,7 @@ impl VM {
                             continue;
                         }
                         _ => {
-                            return Err(self.s_error("invalid call target"));
+                            return self.error("invalid call target".into());
                         }
                     }
                 }
@@ -724,28 +760,28 @@ impl VM {
                     self.push_obj(obj);
                 }
                 ByteCode::ArrayGet => {
-                    let idx = self.pop_int("invalid index")?;
+                    let idx = self.pop_int("invalid index".into())?;
                     let ptr = self.pop();
                     if let Object::Array(arr) = self.get_obj(ptr) {
                         if !(0 <= idx && (idx as usize) < arr.items.len()) {
-                            return Err(self.s_error("index out of bounds"));
+                            return self.error("index out of bounds".into());
                         }
                         self.push(arr.items[idx as usize]);
                     } else {
-                        return Err(self.s_error("invalid index target"));
+                        return self.error("invalid index target".into());
                     }
                 }
                 ByteCode::ArraySet => {
                     let val = self.pop();
-                    let idx = self.pop_int("invalid index")?;
+                    let idx = self.pop_int("invalid index".into())?;
                     let ptr = self.pop();
                     if let Object::Array(arr) = self.get_obj_mut(ptr)? {
                         if !(0 <= idx && (idx as usize) < arr.items.len()) {
-                            return Err(self.s_error("index out of bounds"));
+                            return self.error("index out of bounds".into());
                         }
                         arr.items[idx as usize] = val;
                     } else {
-                        return Err(self.s_error("invalid index target"));
+                        return self.error("invalid index target".into());
                     }
                     self.push(val);
                 }
@@ -766,9 +802,7 @@ impl VM {
                         if let Some(StructMember::Method { ptr }) = base.members.get(&method_name) { 
                             self.push(ptr.clone());
                         } else {
-                            return Err(self.error(
-                                    format!("invalid method reference in `struct {}`", base.name)
-                            ));
+                            return self.error(format!("invalid method reference in `struct {}`", base.name));
                         }
                     } else {
                         unreachable!()
@@ -794,13 +828,10 @@ impl VM {
                                 };
                                 self.push_obj(Object::Method(method));
                             } else {
-                                return Err(self.error(
-                                        // TODO: log struct name too
-                                        format!("field {} doesn't exist", field_name)
-                                ))
+                                return self.error(format!("field {field_name} doesn't exist"));
                             }
                         },
-                        _ => unreachable!("expected struct instance")
+                        _ => return self.error("expected struct instance".into())
                     }
                 }
                 ByteCode::FieldSet => {
@@ -814,10 +845,7 @@ impl VM {
                         if let Some(field) = le_struct.data.get_mut(&field_name) {
                             *field = val;
                         } else {
-                            return Err(self.error(
-                                    // TODO: log struct name too
-                                    format!("field {} doesn't exist", field_name)
-                            ));
+                            return self.error(format!("field {field_name} doesn't exist"));
                         }
                     }
                     self.push(val);
@@ -891,34 +919,33 @@ impl VM {
         self.call_stack.pop().unwrap()
     }
 
-    fn pop_bool(&mut self, msg: &'static str) -> Result<bool, VMError> {
+    fn pop_bool(&mut self, msg: String) -> Result<bool, VMError> {
         match self.pop_obj() {
             Object::Bool(x) => Ok(x),
-            _ => Err(self.s_error(msg))
+            _ => self.error(msg)
         }
     }
 
-    fn pop_int(&mut self, msg: &'static str) -> Result<i32, VMError> {
+    fn pop_int(&mut self, msg: String) -> Result<i32, VMError> {
         match self.pop_obj() {
             Object::Integer(x) => Ok(x),
-            _ => Err(self.s_error(msg))
+            _ => self.error(msg)
         }
     }
 
-    fn s_error(&self, msg: &'static str) -> VMError {
-        self.error(msg.into())
-    }
-
-    fn error(&self, msg: String) -> VMError {
+    fn raw_error(&self, msg: String) -> VMError {
         VMError {
             msg,
-            tok: 
-                self.prog.chunks[
+            tok: self.prog.chunks[
                     self.frame.func.chunk as usize
                 ].info[
                     self.frame.ip as usize
                 ].clone()
         }
+    }
+
+    fn error<T>(&self, msg: String) -> Result<T, VMError> {
+        Err(self.raw_error(msg))
     }
 }
 

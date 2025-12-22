@@ -41,9 +41,17 @@ pub enum Token {
     PlusEqual,
     Star,
     StarEqual,
-
+    Caret,
+    CaretEqual,
+    Percent,
+    PercentEqual,
     And,
+    LogicalAnd,
+    LogicalAndEqual,
     Or,
+    LogicalOr,
+    LogicalOrEqual,
+
     Bang,
     BangEqual,
     Equal,
@@ -71,6 +79,7 @@ pub enum Token {
     String,
     Identifer,
 
+    ByteT,
     IntT,
     FloatT,
     StrT,
@@ -270,15 +279,26 @@ impl Lexer {
             '|' => {
                 if self.match_char('|') {
                     Token::Or
+                } else if self.match_char('=') {
+                    Token::LogicalOrEqual
                 } else {
-                    return Err(LexerError::new("there is no '|' operator", self));
+                    Token::LogicalOr
                 }
             }
             '&' => {
                 if self.match_char('&') {
                     Token::And
+                } else if self.match_char('=') {
+                    Token::LogicalAndEqual
                 } else {
-                    return Err(LexerError::new("there is no '|' operator", self));
+                    Token::LogicalAnd
+                }
+            }
+            '^' => {
+                if self.match_char('=') {
+                    Token::CaretEqual
+                } else {
+                    Token::Caret
                 }
             }
             ':' => {
@@ -329,6 +349,7 @@ impl Lexer {
                     "struct" => Token::Struct,
                     "impl" => Token::Impl,
                     "self" => Token::LeSelf,
+                    "Byte" => Token::ByteT,
                     "Int" => Token::IntT,
                     "Float" => Token::FloatT,
                     "Str" => Token::StrT,

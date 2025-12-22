@@ -1,4 +1,4 @@
 all:
 	cargo build --release
-	mv target/debug/syn syn.out
+	cp target/release/syn syn.out
 	echo "created ./syn.out"
