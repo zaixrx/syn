@@ -3,7 +3,6 @@ func main() {
 	let idx = 0;
 	while idx < 3 {
 		println("arr[{}] = {}", idx, arr[idx]);
-		// println("{}", arr[idx]);
 		idx = idx + 1;
 	}
 }

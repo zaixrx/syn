@@ -2,14 +2,19 @@ use std::io;
 use std::{collections::HashMap, fmt::Debug};
 use serde::{Serialize, Deserialize};
 
+use crate::arena::{Arena, Pointer};
 use crate::lexer::TokenHeader;
 
-pub struct VM {
+pub struct VM<'a> {
+    // VM state
     prog: Program,
+    stack: Vec<Pointer>,
     frame: CallFrame,
-    stack: Vec<ObjPointer>,
-    globals: Vec<ObjPointer>,
-    call_stack: Vec<CallFrame>
+    call_stack: Vec<CallFrame>,
+
+    // data
+    arena: &'a mut Arena,
+    globals: Vec<Pointer>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -19,14 +24,20 @@ pub struct Program {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Chunk {
-    pub objs: Vec<Classifer<Object>>,
     code: Vec<ByteCode>,
     info: Vec<TokenHeader>, // info for code(info.len() = code.len())
 }
 
+#[derive(Clone)]
+pub struct CallFrame {
+    ip: IP,
+    func: Func,
+    stack_offset: usize,
+}
+
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
-pub enum Classifer<T> {
-    Raw(T),
+pub enum Classifier<T> {
+    Runtime(T),
     Readonly(T),
 }
 
@@ -48,7 +59,7 @@ pub enum Object {
 #[repr(u8)]
 #[derive(Serialize, Deserialize, Debug, Copy, Clone)]
 pub enum ByteCode {
-    Push(ObjPointer),
+    Push(Pointer),
     Pop,
 
     Add,
@@ -77,8 +88,8 @@ pub enum ByteCode {
     LGet(LocalCounter),
     LSet(LocalCounter),
 
-    Jump(InstPtr),
-    JumpIfFalse(InstPtr),
+    Jump(IP),
+    JumpIfFalse(IP),
     Call(ArgsCounter),
 
     Array(usize),
@@ -117,21 +128,13 @@ type SynString = String;
 #[allow(dead_code)]
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Array {
-    pub typ: Type,
-    pub items: Vec<ObjPointer>,
+    pub len: usize,
+    pub base: Pointer,
 }
 
 impl PartialEq for Array {
     fn eq(&self, other: &Array) -> bool {
-        if self.items.len() != other.items.len() {
-            return false;
-        }
-        for i in 0..self.items.len() {
-            if self.items[i] != other.items[i] {
-                return false;
-            }
-        }
-        return true;
+        return self.len == other.len; // TODO: fix this
     }
 }
 
@@ -145,10 +148,16 @@ pub struct Func {
     pub is_method: bool,
 }
 
+impl PartialEq for Func {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.arity == other.arity && self.retype == other.retype
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct Method {
-    func: ObjPointer,
-    owner: ObjPointer, // points to `self`
+    func: Pointer,
+    owner: Pointer, // points to `self`
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -160,284 +169,40 @@ pub struct Struct {
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
-pub struct StructAlive {
-    pub base: ObjPointer,
-    pub data: HashMap<String, ObjPointer> // TODO: have a list of pointer instead
-}
-
-pub type ObjCounter = u32;
-pub type ObjPointer = (FuncCounter, ObjCounter);
-pub type FuncCounter = u32;
-pub type ArgsCounter = u8;
-pub type LocalCounter = usize;
-pub type GlobalCounter = usize;
-pub type MethodCounter = u8;
-pub type InstPtr = usize;
-
-impl Program {
-    pub fn new() -> Self {
-        Self {
-            chunks: vec![Chunk::new()],
-        }
-    }
-
-    pub fn push(&mut self, c: Chunk) -> Result<FuncCounter, &'static str> {
-        let idx = self.chunks.len() as FuncCounter;
-        if idx < FuncCounter::MAX {
-            self.chunks.push(c);
-            Ok(idx)
-        } else {
-            Err("exceeded the number of possible functions in a program")
-        }
-    }
-
-    fn load_obj(&mut self, fc: FuncCounter, obj: Classifer<Object>, tok: TokenHeader) -> Result<ObjPointer, &'static str> {
-        let chunk = &mut self.chunks[fc as usize];
-        let ptr = (fc, chunk.objs.len() as ObjCounter);
-        if ptr.1 < ObjCounter::MAX {
-            chunk.objs.push(obj);
-            chunk.push(ByteCode::Push(ptr), tok);
-            Ok(ptr)
-        } else {
-            Err("can't define more constants in chunk")
-        }
-    }
-
-    pub fn chunk_load_obj(&mut self, fc: FuncCounter, obj: Object, tok: TokenHeader) -> Result<ObjPointer, &'static str> {
-        self.load_obj(fc, Classifer::Raw(obj), tok)
-    }
-
-    pub fn chunk_load_readonly_obj(&mut self, fc: FuncCounter, obj: Object, tok: TokenHeader) -> Result<ObjPointer, &'static str> {
-        self.load_obj(fc, Classifer::Readonly(obj), tok)
-    }
-
-    pub fn get_obj(&self, ptr: ObjPointer) -> &Object {
-        self.chunks[ptr.0 as usize].get_obj(ptr.1)
-    }
-
-    pub fn get_obj_mut(&mut self, ptr: ObjPointer) -> Result<&mut Object, &'static str> {
-        self.chunks[ptr.0 as usize].get_obj_mut(ptr.1)
-    }
-
-    #[allow(unused)]
-    pub fn chunk_disassemble_one(&self, fc: FuncCounter, ip: InstPtr) {
-        print!("{:0>4}", ip);
-        match self.chunks[fc as usize].code[ip] {
-            ByteCode::Push(i) => {
-                println!("  Push {} --> {:?}", i.1, self.chunks[i.0 as usize].objs[i.1 as usize]);
-            }
-            byte => println!("  {:?}", byte),
-        };
-    }
-
-    #[allow(unused)]
-    pub fn chunk_disassemble(&self, fc: FuncCounter) {
-        for ip in 0..self.chunks[fc as usize].code.len() {
-            self.chunk_disassemble_one(fc, ip);
-        }
-    }
-
-    pub fn disassemble(&self) {
-        println!("== PROG_START ==");
-        for fc in 0..self.chunks.len() {
-            self.chunk_disassemble(fc as FuncCounter);
-            println!();
-        }
-        println!("== PROG_END ==");
-    }
-
-    pub fn write_to_file(&self, filepath: &str) -> std::io::Result<()> { 
-        let buf = postcard::to_stdvec(&self).map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
-        std::fs::write(filepath, buf)
-    }
-
-    pub fn read_from_file(filepath: &str) -> std::io::Result<Program> {
-        let bytes = std::fs::read(filepath)?;
-        postcard::from_bytes(&bytes).map_err(|err| io::Error::new(io::ErrorKind::Other, err))
-    }
-}
-
-impl Chunk {
-    pub fn new() -> Self {
-        Self {
-            objs: Vec::new(),
-            info: Vec::new(),
-            code: Vec::new(),
-        }
-    }
-
-    pub fn count(&self) -> usize {
-        self.code.len()
-    }
-
-    pub fn push(&mut self, b: ByteCode, t: TokenHeader) -> usize {
-        self.info.push(t);
-        self.code.push(b);
-        self.code.len() - 1
-    }
-
-    pub fn pushs(&mut self, b1: ByteCode, b2: ByteCode, t: TokenHeader) -> usize {
-        self.push(b1, t.clone());
-        self.push(b2, t)
-    }
-
-    pub fn set(&mut self, idx: usize, b: ByteCode) {
-        self.code[idx] = b;
-    }
-
-    pub fn get_obj(&self, idx: ObjCounter) -> &Object {
-        match &self.objs[idx as usize] {
-            Classifer::Raw(obj) => obj,
-            Classifer::Readonly(obj) => obj
-        }
-    }
-
-    pub fn get_obj_mut(&mut self, idx: ObjCounter) -> Result<&mut Object, &'static str> {
-        match &mut self.objs[idx as usize] {
-            Classifer::Raw(obj) => Ok(obj),
-            Classifer::Readonly(obj) => Ok(obj),
-            // Classifer::Readonly(_) => Err("failed to mutate")
-        }
-    }
-
-    pub fn get_string_at_line(&self, _: usize) -> &str {
-        "TODO: get_string_at_line"
-    }
-}
-
-impl Object {
-    fn to_bool(self) -> bool {
-        match self {
-            Object::Bool(false) | Object::Nil => false,
-            _ => true,
-        }
-    }
-
-    fn to_string(&self, prog: &Program, tab_lvl: usize) -> String {
-        match self {
-            Object::Byte(val) => {
-                val.to_string()
-            }
-            Object::Integer(val) => {
-                val.to_string()
-            }
-            Object::Float(val) => {
-                val.to_string()
-            }
-            Object::Bool(val) => {
-                val.to_string()
-            }
-            Object::String(val) => {
-                val.to_string()
-            }
-            Object::Function(val) => {
-                format!("Func<{}>", val.name)
-            }
-            Object::Method(Method { func, owner }) => {
-                let s1 = prog.get_obj(*func).to_string(prog, tab_lvl);
-                let s2 = prog.get_obj(*owner).to_string(prog, tab_lvl);
-                format!("Method<{}, {}>", s1, s2)
-            }
-            Object::Array(arr) => {
-                let mut s = String::from("[");
-                for i in 0..arr.items.len() {
-                    let ptr = arr.items[i];
-                    let obj_str = prog.get_obj(ptr).to_string(prog, tab_lvl + 1);
-                    if i + 1 < arr.items.len() {
-                        s = format!("{}{}, ", s, obj_str);
-                    } else {
-                        s = format!("{}{}]", s, obj_str);
-                    }
-                }
-                s
-            },
-            Object::Struct(typ) => {
-                format!("Struct<{}>", typ.name)
-            }
-            Object::StructAlive(val) => {
-                if let Object::Struct(base) = prog.get_obj(val.base) {
-                    let mut s = format!("{} {{\n", base.name);
-                    for (key, val) in &val.data {
-                        let obj = prog.get_obj(val.clone());
-                        s = format!("{s}{key: >tab$}: {}\n", obj.to_string(prog, tab_lvl+1), tab=(tab_lvl+1)*4);
-                    }
-                    format!("{s}}}")
-                } else {
-                    unreachable!()
-                }
-            }
-            Object::Nil => {
-                format!("nil")
-            }
-        }
-    }
-}
-
-impl Struct {
-    pub fn new(name: String) -> Self {
-        Self {
-            name,
-            fields_count: 0,
-            methods_count: 0,
-            members: HashMap::new(),
-        }
-    }
-
-    pub fn add_member(&mut self, name: String, member: StructMember) {
-        match member {
-            StructMember::Field { .. } => {
-                self.fields_count += 1;
-                self.members.insert(name, member)
-            },
-            StructMember::Method { .. } => {
-                self.methods_count += 1;
-                self.members.insert(name, member)
-            }
-        };
-    }
+pub enum StructMember {
+    Field { typ: Type },
+    Method { ptr: Pointer }, // points to the function
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
-pub enum StructMember {
-    Field { typ: Type },
-    Method { ptr: ObjPointer }, // points to the function
+pub struct StructAlive {
+    pub base: Pointer,
+    pub data: HashMap<String, Pointer> // TODO: have a list of pointer instead
 }
 
-impl PartialEq for Func {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name && self.arity == other.arity && self.retype == other.retype
-    }
-}
+pub type FuncCounter = usize;
+pub type LocalCounter = usize;
+pub type GlobalCounter = usize;
+pub type ArgsCounter = u8;
+pub type MethodCounter = u8;
+pub type IP = usize;
 
-impl Func {
-    pub fn new() -> Self {
-        Self {
-            arity: 0,
-            chunk: 0,
-            retype: Type::None,
-            name: String::new(),
-            is_method: false,
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct CallFrame {
-    ip: InstPtr,
-    func: Func,
-    stack_offset: usize,
-}
-
-impl VM {
-    pub fn new(prog: Program) -> Self {
-        let frame = CallFrame {
-            ip: 0,
-            stack_offset: 0,
-            func: Func::new(),
-        };
+impl<'a> VM<'a> {
+    pub fn new(arena: &'a mut Arena, prog: Program) -> Self {
         Self {
             prog,
-            frame,
+            arena,
+            frame: CallFrame {
+                ip: 0,
+                stack_offset: 0,
+                func: Func {
+                    arity: 0,
+                    name: String::new(),
+                    retype: Type::None,
+                    chunk: 0,
+                    is_method: false,
+                },
+            },
             stack: Vec::new(),
             call_stack: Vec::new(),
             globals: Vec::new(),
@@ -445,53 +210,65 @@ impl VM {
     }
 
     #[inline]
-    fn push(&mut self, ptr: ObjPointer) {
+    fn get_obj(&self, ptr: Pointer) -> &Object {
+        self.arena.get_obj(ptr).
+            expect("Core not dumped ): Segmentation Vailation")
+    }
+
+    #[inline]
+    fn get_obj_mut(&mut self, ptr: Pointer) -> &mut Object {
+        self.arena.get_obj_mut(ptr).
+            expect("Core not dumped ): Segmentation Vailation")
+    }
+
+    #[inline]
+    fn stack_push(&mut self, ptr: Pointer) {
         self.stack.push(ptr);
     }
 
     #[inline]
-    fn peek(&self, lvl: usize) -> ObjPointer {
+    fn stack_peek(&self, lvl: usize) -> Pointer {
         self.stack[self.stack.len() - (lvl + 1)]
     }
 
     #[inline]
-    fn pop(&mut self) -> ObjPointer {
-        self.stack.pop().unwrap()
+    fn stack_pop(&mut self) -> Pointer {
+        self.stack.pop().expect("stack smashing detected")
     }
 
     #[inline]
-    fn get_obj(&self, ptr: ObjPointer) -> &Object {
-        self.prog.get_obj(ptr)
+    fn stack_push_runtime_obj(&mut self, obj: Object) {
+        let ptr = self.arena.push_obj(Classifier::Runtime(obj));
+        self.stack_push(ptr);
     }
 
     #[inline]
-    fn get_obj_mut(&mut self, ptr: ObjPointer) -> Result<&mut Object, VMError> {
-        let err = self.raw_error("invalid".into());
-        self.prog.get_obj_mut(ptr).map_err(|_| err)
-    }
-
-    #[inline]
-    fn push_obj(&mut self, obj: Object) {
-        let fc = self.frame.func.chunk;
-        let chunk = &mut self.prog.chunks[fc as usize];
-        let oc = chunk.objs.len() as ObjCounter;
-        chunk.objs.push(Classifer::Raw(obj));
-        self.push((fc, oc))
-    }
-
-    #[inline]
-    // BEWARE: this clones the value but doesn't get it's reference
-    // delete the const out of the chunk
-    fn pop_obj(&mut self) -> Object {
-        let ptr = self.pop();
+    fn stack_pop_obj(&mut self) -> Object {
+        let ptr = self.stack_pop();
         self.get_obj(ptr).clone()
     }
 
-    fn peek_obj(&self, lvl: usize) -> &Object {
-        let ptr = self.peek(lvl);
+    fn stack_peek_obj(&self, lvl: usize) -> &Object {
+        let ptr = self.stack_peek(lvl);
         self.get_obj(ptr)
     }
 
+    fn raw_error(&self, msg: String) -> VMError {
+        VMError {
+            msg,
+            tok: self.prog.chunks[
+                    self.frame.func.chunk as usize
+                ].info[
+                    self.frame.ip as usize
+                ].clone()
+        }
+    }
+
+    fn error<T>(&self, msg: String) -> Result<T, VMError> {
+        Err(self.raw_error(msg))
+    }
+
+    // TODO: replace with by macro
     fn must_op<T>(&self, a: Option<T>, msg: &'static str) -> Result<T, VMError> {
         match a {
             Some(val) => Ok(val),
@@ -502,10 +279,13 @@ impl VM {
     pub fn exec(mut self) -> Result<(), VMError> {
         while self.frame.ip < self.prog.chunks[self.frame.func.chunk as usize].count() {
             // self.prog.chunk_disassemble_one(self.frame.func.chunk, self.frame.ip);
-            let byte = self.prog.chunks[self.frame.func.chunk as usize].code[self.frame.ip];
-            match byte {
-                ByteCode::Push(i) => {
-                    self.push(i);
+            let bytecode = self.prog.chunks[self.frame.func.chunk as usize].code[self.frame.ip];
+            match bytecode {
+                ByteCode::Push(ptr) => {
+                    self.stack_push(ptr);
+                }
+                ByteCode::Pop => {
+                    self.stack_pop();
                 }
                 ByteCode::Add
                 | ByteCode::Sub
@@ -517,10 +297,10 @@ impl VM {
                 | ByteCode::XOR 
                 | ByteCode::LogicalAnd 
                 | ByteCode::Modulo => {
-                    let y = self.pop_obj();
-                    let x = self.pop_obj();
+                    let y = self.stack_pop_obj();
+                    let x = self.stack_pop_obj();
                     if let Object::Integer(x) = x && let Object::Integer(y) = y {
-                        let obj = match byte {
+                        let obj = match bytecode {
                             ByteCode::Add => Object::Integer(
                                 self.must_op(x.checked_add(y), "invalid addition")?,
                             ),
@@ -553,9 +333,9 @@ impl VM {
                             },
                             _ => return self.error("invalid opreator on integer".into())
                         };
-                        self.push_obj(obj);
+                        self.stack_push_runtime_obj(obj);
                     } else if let Object::Float(x) = x && let Object::Float(y) = y {
-                        let obj = match byte {
+                        let obj = match bytecode {
                             ByteCode::Add => Object::Float({
                                 let z = x + y;
                                 self.must_op(z.is_finite().then_some(z), "addition overflow")?
@@ -584,9 +364,9 @@ impl VM {
                             },
                             _ => return self.error("invalid operator on float".into())
                         };
-                        self.push_obj(obj);
+                        self.stack_push_runtime_obj(obj);
                     } else if let Object::Byte(x) = x && let Object::Byte(y) = y {
-                        let obj = match byte {
+                        let obj = match bytecode {
                             ByteCode::Add => Object::Byte(
                                 self.must_op(x.checked_add(y), "invalid addition")?,
                             ),
@@ -619,112 +399,94 @@ impl VM {
                             },
                             _ => return self.error("invalid opreator on byte".into())
                         };
-                        self.push_obj(obj);
+                        self.stack_push_runtime_obj(obj);
                     } else if let Object::String(x) = x && let Object::String(y) = y {
-                        let obj = match byte {
+                        let obj = match bytecode {
                             ByteCode::Add => {
                                 Object::String(String::from(x + y.as_str()))
                             }
                             _ => return self.error("invalid operator on strings".into())
                         };
-                        self.push_obj(obj);
+                        self.stack_push_runtime_obj(obj);
                     } else {
-                        return self.error(format!("invalid operands for {:?}", byte));
+                        return self.error(format!("invalid operands for {bytecode:?}"));
                     };
                 }
                 ByteCode::Print(count) => {
-                    // TODO: utterly slow
-                    let mut buffer = String::new();
-                    for _ in 0..count {
-                        let ptr = self.pop();
-                        let obj = self.get_obj(ptr);
-                        buffer = format!("{}{}", obj.to_string(&self.prog, 1), buffer);
-                    }
-                    println!("{}", buffer);
+                    (0..count).for_each(|_| {
+                        let obj = self.stack_pop_obj();
+                        println!("{}", self.obj_to_str(&obj));
+                    });
                 }
                 ByteCode::Neg => {
-                    let obj = match self.pop_obj() {
+                    let obj = match self.stack_pop_obj() {
                         Object::Float(val) => Object::Float(-val),
                         Object::Integer(val) => Object::Integer(-val),
                         _ => return self.error("operand is required to be an integer".into())
                     };
-                    self.push_obj(obj);
+                    self.stack_push_runtime_obj(obj);
                 }
                 ByteCode::Or | ByteCode::And => {
-                    let y = self.pop_bool("left operand is required to be a boolean".into())?;
-                    let x = self.pop_bool("right operand is require to be a boolean".into())?;
-                    let obj = match byte {
-                        ByteCode::Or => {
-                            Object::Bool(x || y)
-                        },
-                        ByteCode::And => {
-                            Object::Bool(x && y)
-                        },
-                        _ => {
-                            unreachable!()
-                        },
+                    let (y, x) = (self.stack_pop_obj(), self.stack_pop_obj());
+                    let obj = match bytecode {
+                        ByteCode::Or => Object::Bool(x.to_bool() || y.to_bool()),
+                        ByteCode::And => Object::Bool(x.to_bool() && y.to_bool()),
+                        _ => unreachable!(),
                     };
-                    self.push_obj(obj);
+                    self.stack_push_runtime_obj(obj);
                 }
                 ByteCode::Equal => {
-                    let y = self.pop_obj();
-                    let x = self.pop_obj();
-                    let obj = Object::Bool(x == y);
-                    self.push_obj(obj);
+                    let (y, x) = (self.stack_pop_obj(), self.stack_pop_obj());
+                    self.stack_push_runtime_obj(Object::Bool(x == y));
                 }
                 ByteCode::Not => {
-                    let x = self.pop_bool("operand expected to be a boolean".into())?;
-                    let obj = Object::Bool(!x);
-                    self.push_obj(obj);
-                }
-                ByteCode::Pop => {
-                    self.pop();
+                    let old = self.stack_pop_obj();
+                    let new = match old {
+                        Object::Bool(val) => Object::Bool(!val),
+                        Object::Byte(val) => Object::Byte(!val),
+                        Object::Integer(val) => Object::Integer(!val), // applies 2's complement...
+                                                                       // TODO: add '~' operator
+                        _ => return self.error(format!("cannot apply unary operator '!' to {}", self.obj_to_str(&old)))
+                    };
+                    self.stack_push_runtime_obj(new);
                 }
                 ByteCode::GDef => {
-                    let ptr = self.pop();
+                    let ptr = self.stack_pop();
                     self.globals.push(ptr);
                 }
                 ByteCode::GGet(idx) => {
-                    self.push(self.globals[idx as usize]);
+                    self.stack_push(self.globals[idx]);
                 }
-                // TODO: move typechecking to compile time
                 ByteCode::GSet(idx) => {
-                    let new_ptr = self.pop();
-                    self.globals[idx as usize] = new_ptr;
+                    self.globals[idx] = self.stack_peek(0);
                 }
                 ByteCode::LDef => (), // yeah
                 ByteCode::LGet(idx) => {
-                    self.push(self.stack[self.frame.stack_offset + idx])
+                    self.stack_push(self.stack[self.frame.stack_offset + idx])
                 }
-                // TODO: move typechecking to compile time
                 ByteCode::LSet(idx) => {
-                    let new_ptr = self.peek(0);
-                    self.stack[self.frame.stack_offset + idx] = new_ptr;
+                    self.stack[self.frame.stack_offset + idx] = self.stack_peek(0);
                 }
                 ByteCode::Jump(dest) => {
-                    self.frame.ip = dest - 1; // to make room for iterating
+                    self.frame.ip = dest - 1; // to make room for next iteration
                 }
                 ByteCode::JumpIfFalse(dest) => {
-                    if !self.pop_obj().to_bool() {
+                    if !self.stack_pop_obj().to_bool() {
                         self.frame.ip = dest - 1;
                     }
                 }
                 ByteCode::Call(args_c) => {
-                    let mut args = (0..args_c).map(|_| self.pop()).collect::<Vec<ObjPointer>>();
-                    args.reverse();
-                    // TODO: move call validation to compile-time so that you only need to store
-                    // the function's pointer in the CallFrame and get rid of the chunk pointers
-                    let obj = self.pop_obj();
-                    match obj {
+                    let mut args = (0..args_c).map(|_| self.stack_pop()).collect::<Vec<_>>(); args.reverse();
+                    match self.stack_pop_obj() {
                         Object::Function(func) => {
                             if func.arity != args_c as usize {
                                 return self.error(format!("expected {} args got {}", func.arity, args_c));
                             }
-                            self.push_func(self.frame.clone());
+                            self.call_stack.push(self.frame.clone());
                             self.frame.ip = 0;
                             self.frame.stack_offset = self.stack.len();
                             for arg in args {
-                                self.push(arg);
+                                self.stack_push(arg);
                             }
                             self.frame.func = func;
                             continue;
@@ -732,17 +494,17 @@ impl VM {
                         Object::Method(method) => {
                             let func = match self.get_obj(method.func) {
                                 Object::Function(func) => func.clone(),
-                                _ => unreachable!()
+                                _ => panic!("vm::VM::exec @ match arm ByteCode::Call @ Object::Method: invalid func")
                             };
-                            if func.arity != (args_c as usize) + 1 {
+                            if func.arity != 1 + args_c as usize { // because of `self`
                                 return self.error(format!("expected {} args got {}", func.arity - 1, args_c));
                             }
-                            self.push_func(self.frame.clone());
+                            self.call_stack.push(self.frame.clone());
                             self.frame.ip = 0;
                             self.frame.stack_offset = self.stack.len();
-                            self.push(method.owner); // push `self`
+                            self.stack_push(method.owner); // push `self`
                             for arg in args {
-                                self.push(arg);
+                                self.stack_push(arg);
                             }
                             self.frame.func = func;
                             continue;
@@ -752,146 +514,182 @@ impl VM {
                         }
                     }
                 }
-                ByteCode::Ret => { // don't `continue;`
-                    let ret_val_ptr = self.pop();
-                    while self.stack.len() > self.frame.stack_offset { // pop all garbage
-                                                                  // NOTE: this could have been
-                                                                  // done at compile-time similar
-                                                                  // to how blocks manage locals
-                                                                  // but because of args I'll just
-                                                                  // let it here as it is the same
-                        self.pop();
+                ByteCode::Ret => {
+                    let ret_val_ptr = self.stack_pop();
+                    while self.stack.len() > self.frame.stack_offset {
+                        self.stack_pop();
                     }
-                    self.frame = self.pop_func();
-                    self.push(ret_val_ptr);
+                    self.frame = self.call_stack.pop().expect("vm::VM::exec @ match arm ByteCode::Ret: expected to return");
+                    self.stack_push(ret_val_ptr);
                 }
-                // NOTE: I'm not gonna typecheck arrays here as it is uselessly painful
-                ByteCode::Array(count) => {
-                    let typ = Type::None;
-                    let mut items: Vec<ObjPointer> = (0..count).map(|_| self.pop()).collect();
-                    items.reverse();
-                    let obj = Object::Array(Array { typ, items });
-                    self.push_obj(obj);
+                ByteCode::Array(len) => {
+                    let mut objs = Vec::new();
+                    for _ in 0..len {
+                        objs.push(Classifier::Runtime(self.stack_pop_obj()));
+                    }
+                    objs.reverse();
+                    let base = self.arena.push_objs(objs);
+                    let obj = Object::Array(Array { len, base });
+                    self.stack_push_runtime_obj(obj);
                 }
+                // TODO: push array at compile-time
                 ByteCode::ArrayGet => {
-                    let idx = self.pop_int("invalid index".into())?;
-                    let ptr = self.pop();
-                    let obj = self.get_obj(ptr);
-                    match obj {
+                    let idx_obj = self.stack_pop_obj();
+                    match self.stack_pop_obj() {
                         Object::Array(arr) => {
-                            if !(0 <= idx && (idx as usize) < arr.items.len()) {
+                            let idx = match idx_obj {
+                                Object::Byte(idx) => idx as isize,
+                                Object::Integer(idx) => idx as isize,
+                                _ => return self.error("invalid index".into())
+                            };
+                            if idx < 0 || arr.len <= idx as usize {
                                 return self.error("index out of bounds".into());
                             }
-                            self.push(arr.items[idx as usize]);
+                            self.stack_push(arr.base + idx as usize);
                         },
-                        _ => return self.error("invalid index target".into())
+                        _ => return self.error("invalid indexing target".into())
                     }
                 }
                 ByteCode::ArraySet => {
-                    let val = self.pop();
-                    let idx = self.pop_int("invalid index".into())?;
-                    let ptr = self.pop();
-                    if let Object::Array(arr) = self.get_obj_mut(ptr)? {
-                        if !(0 <= idx && (idx as usize) < arr.items.len()) {
-                            return self.error("index out of bounds".into());
-                        }
-                        arr.items[idx as usize] = val;
-                    } else {
-                        return self.error("invalid index target".into());
+                    let val = self.stack_pop();
+                    let idx_obj = self.stack_pop_obj();
+                    match self.stack_pop_obj() {
+                        Object::Array(arr) => {
+                            let idx = match idx_obj {
+                                Object::Byte(idx) => idx as isize,
+                                Object::Integer(idx) => idx as isize,
+                                _ => return self.error("invalid index".into())
+                            };
+                            if idx < 0 || arr.len <= idx as usize {
+                                return self.error("index out of bounds".into());
+                            }
+                            *self.get_obj_mut(arr.base + idx as usize) = self.get_obj(val).clone();
+                        },
+                        _ => return self.error("invalid indexing target".into())
                     }
-                    self.push(val);
+                    self.stack_push(val);
                 }
                 ByteCode::LStruct(idx) => {
                     let base_ptr = self.stack[self.frame.stack_offset + idx];
-                    self.push_struct(base_ptr);
+                    let base = match self.get_obj(base_ptr) {
+                        Object::Struct(base) => base,
+                        _ => panic!("vm::VM::exec @ match arm ByteCode::LStruct: invalid base struct")
+                    };
+                    let mut data = HashMap::new();
+                    for _ in 0..base.fields_count {
+                        if let Object::String(k) = self.stack_pop_obj() {
+                            data.insert(k, self.stack_pop());
+                        } else {
+                            panic!("vm::VM::exec @ match arm ByteCode::LStruct: invalid value kind")
+                        }
+                    }
+                    let le_struct = StructAlive{ base: base_ptr, data };
+                    self.stack_push_runtime_obj(Object::StructAlive(le_struct));
                 }
                 ByteCode::GStruct(idx) => {
                     let base_ptr = self.globals[idx];
-                    self.push_struct(base_ptr);
+                    let base = match self.get_obj(base_ptr) {
+                        Object::Struct(base) => base,
+                        _ => panic!("vm::VM::exec @ match arm ByteCode::GStruct: invalid base struct")
+                    };
+                    let mut data = HashMap::new();
+                    for _ in 0..base.fields_count {
+                        if let Object::String(k) = self.stack_pop_obj() {
+                            data.insert(k, self.stack_pop());
+                        } else {
+                            panic!("vm::VM::exec @ match arm ByteCode::GStruct: invalid value kind")
+                        }
+                    }
+                    let le_struct = StructAlive{ base: base_ptr, data };
+                    self.stack_push_runtime_obj(Object::StructAlive(le_struct));
                 }
                 ByteCode::MethodGet => {
-                    let method_name = match self.pop_obj() {
+                    let method_name = match self.stack_pop_obj() {
                         Object::String(name) => name,
-                        _ => unreachable!()
+                        _ => panic!("vm::VM::exec @ match arm ByteCode::MethodGet: invalid method name")
                     };
-                    if let Object::Struct(base) = self.pop_obj() {
+                    if let Object::Struct(base) = self.stack_pop_obj() {
                         if let Some(StructMember::Method { ptr }) = base.members.get(&method_name) { 
-                            self.push(ptr.clone());
+                            self.stack_push(*ptr);
                         } else {
                             return self.error(format!("invalid method reference in `struct {}`", base.name));
                         }
                     } else {
-                        unreachable!()
+                        panic!("vm::VM::exec @ match arm ByteCode::MethodGet: invalid struct")
                     }
                 }
                 ByteCode::FieldGet => {
-                    let field_name = match self.pop_obj() {
+                    let field_name = match self.stack_pop_obj() {
                         Object::String(name) => name,
-                        _ => unreachable!()
+                        _ => panic!("vm::VM::exec: match arm ByteCode::FieldGet ~ invalid field name")
                     };
-                    let le_struct_ptr = self.pop();
-                    match self.get_obj(le_struct_ptr) {
-                        Object::StructAlive(le_struct) => {
-                            // if it's a field
-                            if let Some(ptr) = le_struct.data.get(&field_name) {
-                                self.push(*ptr);
-                            } 
+                    let struct_ptr = self.stack_pop();
+                    if let Object::StructAlive(le_struct) = self.get_obj(struct_ptr) {
+                        // if it's a field
+                        if let Some(field_ptr) = le_struct.data.get(&field_name) {
+                            self.stack_push(*field_ptr);
+                        } else {
                             // else if it's a method
-                            else if let Some(StructMember::Method { ptr }) = self.must_get_struct_mut(le_struct.base)?.members.get(&field_name) {
+                            let le_base = match self.get_obj_mut(le_struct.base) {
+                                Object::Struct(le_base) => le_base,
+                                _ => panic!("vm::VM::exec @ match arm ByteCode::FieldGet: invalid struct base")
+                            };
+                            if let Some(StructMember::Method { ptr }) = le_base.members.get(&field_name) {
                                 let method = Method {
-                                    owner: le_struct_ptr,
+                                    owner: struct_ptr,
                                     func: *ptr,
                                 };
-                                self.push_obj(Object::Method(method));
+                                self.stack_push_runtime_obj(Object::Method(method));
                             } else {
                                 return self.error(format!("field {field_name} doesn't exist"));
                             }
-                        },
-                        _ => return self.error("expected struct instance".into())
+                        }
                     }
                 }
                 ByteCode::FieldSet => {
-                    let val = self.pop();
-                    let field_name = match self.pop_obj() {
+                    let val_set = self.stack_pop();
+                    let field_name = match self.stack_pop_obj() {
                         Object::String(name) => name,
-                        _ => unreachable!()
+                        _ => panic!("vm::VM::exec: match arm ByteCode::FieldSet")
                     };
-                    let le_struct_ptr = self.pop();
-                    if let Object::StructAlive(le_struct) = self.get_obj_mut(le_struct_ptr)? {
-                        if let Some(field) = le_struct.data.get_mut(&field_name) {
-                            *field = val;
+                    let struct_ptr = self.stack_pop();
+                    if let Object::StructAlive(instance) = self.get_obj_mut(struct_ptr) {
+                        if let Some(field) = instance.data.get_mut(&field_name) {
+                            *field = val_set;
                         } else {
-                            return self.error(format!("field {field_name} doesn't exist"));
+                            return self.error(format!("no field {field_name} on struct instance"));
                         }
+                    } else {
+                        panic!("vm::VM::exec: match arm ByteCode::FieldSet.");
                     }
-                    self.push(val);
+                    self.stack_push(val_set);
                 }
                 ByteCode::StructImpl(methods_count) => {
-                    let base_ptr = self.pop();
+                    let base_ptr = self.stack_pop();
                     for _ in 0..methods_count {
-                        let method_ptr = self.pop();
+                        let method_ptr = self.stack_pop();
                         let method_name = match self.get_obj(method_ptr) {
                             Object::Function(le_method) => le_method.name.clone(),
                             _ => unreachable!()
                         };
-                        // TODO: this is awful
-                        if let Object::Struct(base) = self.get_obj_mut(base_ptr)? {
+                        if let Object::Struct(base) = self.get_obj_mut(base_ptr) {
                             base.add_member(method_name, StructMember::Method { ptr: method_ptr });
                         } else {
-                            unreachable!();
+                            panic!("vm::VM::exec: match arm ByteCode::StructImpl.");
                         }
                     }
                 }
                 ByteCode::Assert => {
-                    if !self.peek_obj(0).clone().to_bool() {
+                    if !self.stack_peek_obj(0).to_bool() {
                         let chunk = &self.prog.chunks[self.frame.func.chunk as usize];
                         let msg = chunk.get_string_at_line(chunk.info[self.frame.ip].line);
-                        println!("RUNETIME PANIC: {}", msg);
+                        println!("RUNTIME PANIC: {}", msg);
                         std::process::exit(69);
                     }
                 }
                 ByteCode::Panic => {
-                    println!("RUNETIME PANIC: {}", self.pop_obj().to_string(&self.prog, 0));
+                    let obj = self.stack_pop_obj();
+                    println!("RUNTIME PANIC: {}", self.obj_to_str(&obj));
                     std::process::exit(69);
                 }
             }
@@ -900,68 +698,181 @@ impl VM {
         }
         return Ok(());
     }
+}
 
-    fn must_get_struct_mut(&mut self, ptr: ObjPointer) -> Result<&mut Struct, VMError> {
-        match self.get_obj_mut(ptr)? {
-            Object::Struct(le_base) => Ok(le_base),
-            _ => unreachable!()
+impl<'a> VM<'a> {
+    #[allow(unused)]
+    pub fn disassemble_chunk(&self, chunk: FuncCounter) {
+        println!("Chunk {chunk}:");
+        let chunk = &self.prog.chunks[chunk];
+        for (ip, bytecode) in chunk.code.iter().enumerate() {
+            println!("{ip}: {bytecode:?}");
         }
     }
 
-    fn push_struct(&mut self, base_ptr: ObjPointer) {
-        let base = match self.get_obj(base_ptr) {
-            Object::Struct(base) => base,
-            _ => unreachable!()
-        };
-        let mut data = HashMap::new();
-        for _ in 0..base.fields_count {
-            if let Object::String(k) = self.pop_obj() {
-                let v = self.pop();
-                data.insert(k, v);
-            } else {
-                unreachable!();
+    pub fn disassemble_program(&self) {
+        for chunk in 0..self.prog.chunks.len() {
+            self.disassemble_chunk(chunk);
+            println!();
+        }
+    }
+
+    fn obj_to_str(&self, obj: &Object) -> String {
+        match obj {
+            Object::Byte(val) => {
+                val.to_string()
+            }
+            Object::Integer(val) => {
+                val.to_string()
+            }
+            Object::Float(val) => {
+                val.to_string()
+            }
+            Object::Bool(val) => {
+                val.to_string()
+            }
+            Object::String(val) => {
+                val.to_string()
+            }
+            Object::Function(val) => {
+                format!("Func<{}>", val.name)
+            }
+            Object::Method(Method { func, owner }) => {
+                let func = self.arena.get_obj(*func)
+                        .expect("Core not dumped ): Segmentation Vailation");
+                let owner = self.arena.get_obj(*owner)
+                        .expect("Core not dumped ): Segmentation Vailation");
+                format!("Method<{}, {}>", self.obj_to_str(func), self.obj_to_str(owner))
+            }
+            Object::Array(arr) => {
+                let mut s = String::from("[");
+                for i in 0..arr.len {
+                    let obj = self.arena.get_obj(arr.base + i)
+                        .expect("Core not dumped ): Segmentation Vailation");
+                    if i + 1 < arr.len {
+                        s = format!("{}{}, ", s, self.obj_to_str(obj));
+                    } else {
+                        s = format!("{}{}]", s, self.obj_to_str(obj));
+                    }
+                }
+                s
+            },
+            Object::Struct(typ) => {
+                format!("Struct<{}>", typ.name)
+            }
+            Object::StructAlive(instance) => {
+                let base_obj = self.arena.get_obj(instance.base)
+                        .expect("Core not dumped ): Segmentation Vailation");
+                if let Object::Struct(base) = base_obj {
+                    let mut s = format!("{} {{ ", base.name);
+                    for (key, ptr) in &instance.data {
+                        let val = self.arena.get_obj(*ptr)
+                            .expect("Core not dumped ): Segmentation Vailation");
+                        let field_str = format!("{}: {}, ", key, self.obj_to_str(val));
+                        s.push_str(field_str.as_str())
+                    }
+                    format!("{s}}}\n")
+                } else {
+                    unreachable!("vm::VM::obj_to_str: match arm Object::StructAlive.")
+                }
+            }
+            Object::Nil => {
+                "nil".to_string()
             }
         }
-        let le_struct = StructAlive{ base: base_ptr, data };
-        self.push_obj(Object::StructAlive(le_struct));
     }
+}
 
-    #[allow(unused_variables)]
-    fn push_func(&mut self, frame: CallFrame) {
-        self.call_stack.push(frame);
-    }
-
-    fn pop_func(&mut self) -> CallFrame {
-        self.call_stack.pop().unwrap()
-    }
-
-    fn pop_bool(&mut self, msg: String) -> Result<bool, VMError> {
-        match self.pop_obj() {
-            Object::Bool(x) => Ok(x),
-            _ => self.error(msg)
+impl Program {
+    pub fn new() -> Self {
+        Self {
+            chunks: vec![Chunk::new()],
         }
     }
 
-    fn pop_int(&mut self, msg: String) -> Result<i32, VMError> {
-        match self.pop_obj() {
-            Object::Integer(x) => Ok(x),
-            _ => self.error(msg)
+    pub fn push(&mut self, c: Chunk) -> Result<FuncCounter, &'static str> {
+        let idx = self.chunks.len() as FuncCounter;
+        if idx < FuncCounter::MAX {
+            self.chunks.push(c);
+            Ok(idx)
+        } else {
+            Err("exceeded the number of possible functions in a program")
         }
     }
 
-    fn raw_error(&self, msg: String) -> VMError {
-        VMError {
-            msg,
-            tok: self.prog.chunks[
-                    self.frame.func.chunk as usize
-                ].info[
-                    self.frame.ip as usize
-                ].clone()
+    pub fn write_to_file(&self, filepath: &str) -> std::io::Result<()> { 
+        let buf = postcard::to_stdvec(&self).map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+        std::fs::write(filepath, buf)
+    }
+
+    pub fn read_from_file(filepath: &str) -> std::io::Result<Program> {
+        let bytes = std::fs::read(filepath)?;
+        postcard::from_bytes(&bytes).map_err(|err| io::Error::new(io::ErrorKind::Other, err))
+    }
+}
+
+impl Chunk {
+    pub fn new() -> Self {
+        Self {
+            info: Vec::new(),
+            code: Vec::new(),
         }
     }
 
-    fn error<T>(&self, msg: String) -> Result<T, VMError> {
-        Err(self.raw_error(msg))
+    pub fn count(&self) -> usize {
+        self.code.len()
+    }
+
+    pub fn push_instruction(&mut self, b: ByteCode, t: TokenHeader) -> usize {
+        self.info.push(t);
+        self.code.push(b);
+        self.code.len() - 1
+    }
+
+    pub fn push_instructions(&mut self, b1: ByteCode, b2: ByteCode, t: TokenHeader) -> usize {
+        self.push_instruction(b1, t.clone());
+        self.push_instruction(b2, t)
+    }
+
+    pub fn set(&mut self, idx: usize, b: ByteCode) {
+        self.code[idx] = b;
+    }
+
+    pub fn get_string_at_line(&self, _: usize) -> &str {
+        "TODO: get_string_at_line"
+    }
+}
+
+impl Object {
+    fn to_bool(&self) -> bool {
+        match self {
+            Object::Bool(false) | Object::Nil => false,
+            _ => true,
+        }
+    }
+}
+
+impl Struct {
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            fields_count: 0,
+            methods_count: 0,
+            members: HashMap::new(),
+        }
+    }
+
+    pub fn add_member(&mut self, name: String, member: StructMember) {
+        match member {
+            StructMember::Field { .. } => {
+                self.fields_count += 1;
+                self.members.insert(name, member)
+            },
+            StructMember::Method { .. } => {
+                self.methods_count += 1;
+                self.members.insert(name, member)
+            }
+        };
     }
 }
 

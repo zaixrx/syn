@@ -1,10 +1,12 @@
 mod vm;
 mod lexer;
 mod compiler;
+mod arena;
 
 use vm::{Program, VM};
 use compiler::Compiler;
 use std::path::Path;
+use arena::Arena;
 
 use clap::Parser;
 
@@ -27,7 +29,7 @@ struct Args {
 
 const CACHE_DIR: &'static str = ".syncache";
 
-fn load_program(src_path: &Path, load_cache: bool) -> Program {
+fn load_program(arena: &mut Arena, src_path: &Path, load_cache: bool) -> Program {
     if load_cache {
         let src_stem = src_path.file_stem().and_then(|p| p.to_str()).unwrap_or_else(|| {
             eprintln!("ERROR: expected valid source file path");
@@ -42,7 +44,7 @@ fn load_program(src_path: &Path, load_cache: bool) -> Program {
         eprintln!("Lexer failed: {}", err);
         std::process::exit(69)
     });
-    let compiler = Compiler::new(src);
+    let compiler = Compiler::new(arena, src);
     compiler.compile(|err| {
         eprintln!("{}", err);
     }).unwrap_or_else(|| {
@@ -64,28 +66,20 @@ fn write_cache(src_path: &Path, prog: &Program) {
     }
 }
 
-fn exec(prog: Program) {
-    let vm = VM::new(prog);
+fn main() {
+    let args = Args::parse();
+    let src_path = Path::new(&args.filepath);
+    let mut arena = Arena::new();
+    let prog = load_program(&mut arena, &src_path, args.load_cache);
+    if args.write_cache {
+        write_cache(&src_path, &prog);
+    }
+    let vm = VM::new(&mut arena, prog);
+    if args.bytecode {
+        vm.disassemble_program();
+    }
     vm.exec().unwrap_or_else(|err| {
         eprintln!("VM_ERROR: {err}");
         std::process::exit(69)
     });
-}
-
-fn main() {
-    let args = Args::parse();
-
-    let src_path = Path::new(&args.filepath);
-
-    let prog = load_program(src_path, args.load_cache);
-
-    if args.bytecode {
-        prog.disassemble();
-    }
-
-    if args.write_cache {
-        write_cache(&src_path, &prog);
-    }
-
-    exec(prog);
 }

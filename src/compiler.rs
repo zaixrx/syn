@@ -14,10 +14,12 @@ use crate::lexer::{
 };
 
 use crate::vm::{
-    ArgsCounter, ByteCode, Chunk, Func, FuncCounter, GlobalCounter, InstPtr, LocalCounter, ObjPointer, Object, Program, Struct, StructMember, Type, MethodCounter
+    ArgsCounter, ByteCode, Chunk, Classifier, Func, FuncCounter, GlobalCounter, LocalCounter, MethodCounter, Object, Program, Struct, StructMember, Type
 };
 
-pub struct Compiler {
+use crate::arena::{Arena, Pointer};
+
+pub struct Compiler<'a> {
     lexer: Lexer,
     curr: TokenHeader,
 
@@ -36,6 +38,8 @@ pub struct Compiler {
 
     panic_mode: bool,
     declarative_mode: bool, // used to prevent non-declarative top level code -- for structure
+
+    arena: &'a mut Arena,
 }
 
 struct Global {
@@ -78,16 +82,17 @@ enum Precedence {
     Primary,
 }
 
-type RuleFn = fn(&mut Compiler, can_assign: bool) -> Result<(), CompilerError>;
-struct Rule {
-    prefix: Option<RuleFn>,
-    infix: Option<RuleFn>,
+type RuleFn<'a> = fn(&mut Compiler<'a>, bool) -> Result<(), CompilerError>;
+
+struct Rule<'a> {
+    prefix: Option<RuleFn<'a>>,
+    infix: Option<RuleFn<'a>>,
     prec: Precedence,
 }
 
 // public methods
-impl Compiler {
-    pub fn new(src: String) -> Self {
+impl<'a> Compiler<'a> {
+    pub fn new(arena: &'a mut Arena, src: String) -> Self {
         Self {
             lexer: Lexer::new(src),
             curr: TokenHeader {
@@ -115,6 +120,8 @@ impl Compiler {
             panic_mode: false,
             declarative_mode: false,
             had_sync_err: false,
+
+            arena,
         }
     }
  
@@ -137,7 +144,7 @@ impl Compiler {
         if self.had_error {
             None
         } else if let Some(idx) = self.resolve_global("main") {
-            self.prog.chunks[0].pushs(ByteCode::GGet(idx), ByteCode::Call(0), self.curr.clone());
+            self.prog.chunks[0].push_instructions(ByteCode::GGet(idx), ByteCode::Call(0), self.curr.clone());
             Some(self.prog)
         } else {
             report(self.error("consider adding `func main()` to your program"));
@@ -181,7 +188,7 @@ impl Compiler {
 }
 
 // grammar agnostic methods
-impl Compiler {
+impl<'a> Compiler<'a> {
     fn declaration(&mut self) -> Result<(), CompilerError> {
         if self.panic_mode {
             self.synchronize();
@@ -282,35 +289,38 @@ impl Compiler {
         self.parse_precedence(Precedence::Assignment)
     }
 
-    fn parse_precedence(&mut self, precedence: Precedence) -> Result<(), CompilerError> {
+    fn parse_precedence(&mut self, prec : Precedence) -> Result<(), CompilerError> {
         self.next()?;
-        let can_assign = precedence <= Precedence::Assignment;
-        match self.get_rule(self.curr.tokn).prefix {
-            Some(prefix) => {
-                prefix(self, can_assign)?;
-                loop {
-                    let infix_tok = self.peek()?;
-                    let infix_rule = self.get_rule(infix_tok.tokn);
-                    if precedence > infix_rule.prec {
-                        break;
-                    }
-                    if let Some(infix) = infix_rule.infix {
-                        self.next()?;
-                        infix(self, can_assign)?;
-                    } else {
-                        return Err(self.error("invalid expression"));
-                    }
-                }
-                if can_assign && self.peek()?.tokn == Token::Equal {
-                    return Err(self.error("invalid assignment target"));
-                }
+        let can_assign = prec <= Precedence::Assignment;
+        let prefix = {
+            let rule = self.get_rule(self.curr.tokn);
+            if let Some(prefix) = rule.prefix {
+                prefix
+            } else {
+                return Err(self.error("expected expression"))
             }
-            None => return Err(self.error("expected expression")),
+        };
+        prefix(self, can_assign)?;
+        loop {
+            let infix_tok = self.peek()?;
+            let infix_rule = self.get_rule(infix_tok.tokn);
+            if prec > infix_rule.prec {
+                break;
+            }
+            if let Some(infix) = infix_rule.infix {
+                self.next()?;
+                infix(self, can_assign)?;
+            } else {
+                return Err(self.error("invalid expression"));
+            }
+        }
+        if can_assign && self.peek()?.tokn == Token::Equal {
+            return Err(self.error("invalid assignment target"));
         }
         Ok(())
     }
 
-    fn get_rule(&self, tok: Token) -> Rule {
+    fn get_rule<'b>(&self, tok: Token) -> Rule<'b> {
         match tok {
             Token::ScopeRes => Rule {
                 prefix: None,
@@ -437,7 +447,7 @@ impl Compiler {
 }
 
 // non-expression statement grammar
-impl Compiler {
+impl<'a> Compiler<'a> {
     fn compile_let(&mut self) -> Result<(), CompilerError> {
         self.expect(Token::Identifer, "expected identifer")?;
         let byte = if self.scope_depth > 0 {
@@ -450,17 +460,17 @@ impl Compiler {
         if self.check(Token::Equal)? {
             self.expression()?;
         } else {
-            self.load_obj(Object::Nil)?;
+            self.load_runtime_obj(Object::Nil);
         }
         self.push_bytecode(byte)?;
         self.expect(Token::SemiColon, "expected ';' after statement")?;
         Ok(())
     }
 
-    fn compile_method(&mut self) -> Result<ObjPointer, CompilerError> {
+    fn compile_method(&mut self) -> Result<Pointer, CompilerError> {
         self.expect(Token::Identifer, "expected the method's name")?;
         let func = self.compile_func_body(self.curr.lexm.clone())?;
-        self.load_obj(Object::Function(func))
+        Ok(self.load_runtime_obj(Object::Function(func)))
     }
 
     fn compile_func(&mut self) -> Result<(), CompilerError> {
@@ -471,11 +481,8 @@ impl Compiler {
         let token = self.curr.clone();
         self.push_global(None)?;
         let func = self.compile_func_body(token.lexm.clone())?;
-        match self.prog.chunk_load_obj(0, Object::Function(func), token) {
-            Ok(idx) => idx,
-            Err(err) => return Err(self.error(err)),
-        };
-        self.prog.chunks[0].push(ByteCode::GDef, self.curr.clone());
+        self.load_runtime_obj(Object::Function(func));
+        self.prog.chunks[0].push_instruction(ByteCode::GDef, self.curr.clone());
         Ok(())
     }
 
@@ -500,7 +507,7 @@ impl Compiler {
             self.declaration()?;
         }
         self.expect(Token::RightBrace, "expected enclosing '}'")?;
-        self.load_obj(Object::Nil)?;
+        self.load_runtime_obj(Object::Nil);
         self.push_bytecode(ByteCode::Ret)?;
         self.end_scope()?;
         let chunk = self.chunk.take().unwrap();
@@ -571,7 +578,7 @@ impl Compiler {
                 self.push_global(Some(TypeInfo::Struct(le_struct.clone())))?;
                 ByteCode::GDef
             };
-            self.load_readonly_obj(Object::Struct(le_struct))?;
+            self.load_readonly_obj(Object::Struct(le_struct));
             self.push_bytecode(byte)?;
         }
         self.curr = temp;
@@ -666,7 +673,7 @@ impl Compiler {
         if !self.check(Token::SemiColon)? {
             self.expression()?;
         } else {
-            self.load_obj(Object::Nil)?;
+            self.load_runtime_obj(Object::Nil);
         }
         self.expect(Token::SemiColon, "expected ';' after statement")?;
         if self.chunk.is_none() {
@@ -728,7 +735,7 @@ impl Compiler {
                 Err(msg) => return Err(self.error(msg))
             };
             if buf.len() > 0 {
-                self.load_obj(Object::String(buf))?;
+                self.load_runtime_obj(Object::String(buf));
                 count += 1;
             }
             if is_end {
@@ -753,22 +760,22 @@ impl Compiler {
 }
 
 // expression statement grammar
-impl Compiler {
+impl<'a> Compiler<'a> {
     fn literal(&mut self, _: bool) -> Result<(), CompilerError> {
         match self.curr.tokn {
             Token::Int(val) => {
-                self.load_obj(Object::Integer(val))?
+                self.load_runtime_obj(Object::Integer(val))
             },
             Token::Float(val) => {
-                self.load_obj(Object::Float(val))?
+                self.load_runtime_obj(Object::Float(val))
             },
             Token::Bool(val) => {
-                self.load_obj(Object::Bool(val))?
+                self.load_runtime_obj(Object::Bool(val))
             },
             Token::String => {
-                self.load_obj(Object::String(self.curr.lexm.clone()))?
+                self.load_runtime_obj(Object::String(self.curr.lexm.clone()))
             }
-            Token::Nil => self.load_obj(Object::Nil)?,
+            Token::Nil => self.load_runtime_obj(Object::Nil),
             _ => panic!("Compiler::literal ~ unhandled literal {:?}", self.curr),
         };
         Ok(())
@@ -867,7 +874,7 @@ impl Compiler {
                         self.expect(Token::Colon, "expected ':'")?;
                         self.expression()?;
                         self.check(Token::Comma)?;
-                        self.load_obj(Object::String(name.clone()))?;
+                        self.load_runtime_obj(Object::String(name.clone()));
                         set.insert(name);
                     }
                     self.expect(Token::RightBrace, "expected '}'")?;
@@ -899,7 +906,7 @@ impl Compiler {
                             self.expression()?;
                             self.check(Token::Comma)?;
                             set.insert(name.clone());
-                            self.load_obj(Object::String(name))?;
+                            self.load_runtime_obj(Object::String(name));
                         }
                         self.expect(Token::RightBrace, "expected '}'")?;
                         self.push_bytecode(ByteCode::GStruct(idx))?;
@@ -935,14 +942,14 @@ impl Compiler {
     // NOTE: for now it's only specific to `static` methods
     fn method(&mut self, _: bool) -> Result<(), CompilerError> {
         self.expect(Token::Identifer, "exepeted method name")?;
-        self.load_obj(Object::String(self.curr.lexm.clone()))?;
+        self.load_runtime_obj(Object::String(self.curr.lexm.clone()));
         self.push_bytecode(ByteCode::MethodGet)?;
         Ok(())
     }
 
     fn field(&mut self, can_assign: bool) -> Result<(), CompilerError> {
         self.expect(Token::Identifer, "exepeted field name")?;
-        self.load_obj(Object::String(self.curr.lexm.clone()))?;
+        self.load_runtime_obj(Object::String(self.curr.lexm.clone()));
         if can_assign && self.check_for_assign()? {
             self.push_bytecode(ByteCode::FieldSet)?;
         } else {
@@ -952,10 +959,10 @@ impl Compiler {
     }
 
     fn array(&mut self, _: bool) -> Result<(), CompilerError> {
-        let mut count = 0;
+        let mut len = 0;
         while !self.check_with_eof(Token::RightBracket)? {
             loop {
-                count += 1;
+                len += 1;
                 self.expression()?;
                 if !self.check(Token::Comma)? {
                     break;
@@ -965,7 +972,7 @@ impl Compiler {
         if self.curr.tokn != Token::RightBracket {
             return Err(self.error("expected disclosing ']'"));
         }
-        self.push_bytecode(ByteCode::Array(count))?;
+        self.push_bytecode(ByteCode::Array(len))?;
         Ok(())
     }
 
@@ -1041,7 +1048,7 @@ impl Compiler {
 }
 
 // VM::Chunk abstractions
-impl Compiler {
+impl<'a> Compiler<'a> {
     fn get_chunk_at(&mut self, fc: FuncCounter) -> &mut Chunk {
         &mut self.prog.chunks[fc as usize]
     }
@@ -1064,13 +1071,13 @@ impl Compiler {
     #[inline]
     fn push_bytecode(&mut self, b: ByteCode) -> Result<usize, CompilerError> {
         let tok = self.curr.clone();
-        Ok(self.get_chunk()?.push(b, tok))
+        Ok(self.get_chunk()?.push_instruction(b, tok))
     }
 
     #[inline]
     fn push_bytecodes(&mut self, b1: ByteCode, b2: ByteCode) -> Result<usize, CompilerError> {
         let tok = self.curr.clone();
-        Ok(self.get_chunk()?.pushs(b1, b2, tok))
+        Ok(self.get_chunk()?.push_instructions(b1, b2, tok))
     }
 
     #[inline]
@@ -1083,25 +1090,21 @@ impl Compiler {
         Ok(self.prog.chunks[self.chunk.unwrap() as usize].count())
     }
 
-
-    fn load_readonly_obj(&mut self, o: Object) -> Result<ObjPointer, CompilerError> {
-        // NOTE: or_default is a stupid hack 
-        self.prog.chunk_load_readonly_obj(self.chunk.unwrap_or_default(), o, self.curr.clone()).map_err(|err| {
-            self.error(err)
-        })
+    fn load_readonly_obj(&mut self, obj: Object) -> Pointer {
+        self.arena.push_obj(Classifier::Readonly(obj))
     }
 
     #[inline]
-    fn load_obj(&mut self, o: Object) -> Result<ObjPointer, CompilerError> {
-        // NOTE: or_default is a stupid hack 
-        self.prog.chunk_load_obj(self.chunk.unwrap_or_default(), o, self.curr.clone()).map_err(|err| {
-            self.error(err)
-        })
+    fn load_runtime_obj(&mut self, obj: Object) -> Pointer {
+        let chunk = &mut self.prog.chunks[self.chunk.unwrap_or(0)];
+        let ptr = self.arena.push_obj(Classifier::Runtime(obj));
+        chunk.push_instruction(ByteCode::Push(ptr), self.curr.clone());
+        return ptr;
     }
 }
 
 // helpers
-impl Compiler {
+impl<'a> Compiler<'a> {
     fn start_scope(&mut self) {
         self.scope_depth += 1;
     }
@@ -1178,19 +1181,19 @@ impl Compiler {
         None
     }
 
-    fn patch_jump(&mut self, idx: InstPtr) -> Result<(), CompilerError> {
+    fn patch_jump(&mut self, idx: usize) -> Result<(), CompilerError> {
         self.set_bytecode(idx, ByteCode::Jump(self.bytecode_count()?))?;
         Ok(())
     }
 
-    fn patch_fjump(&mut self, idx: InstPtr) -> Result<(), CompilerError> {
+    fn patch_fjump(&mut self, idx: usize) -> Result<(), CompilerError> {
         self.set_bytecode(idx, ByteCode::JumpIfFalse(self.bytecode_count()?))?;
         Ok(())
     }
 }
 
 // parser methods
-impl Compiler {
+impl<'a> Compiler<'a> {
     fn next(&mut self) -> Result<(), CompilerError> {
         match self.lexer.next() {
             Ok(tok) => {
