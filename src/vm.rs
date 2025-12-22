@@ -17,6 +17,163 @@ pub struct Program {
     pub chunks: Vec<Chunk>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Chunk {
+    pub objs: Vec<Classifer<Object>>,
+    code: Vec<ByteCode>,
+    info: Vec<TokenHeader>, // info for code(info.len() = code.len())
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub enum Classifer<T> {
+    Raw(T),
+    Readonly(T),
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
+pub enum Object {
+    Byte(u8),
+    Integer(i32),
+    Float(f64),
+    Bool(bool),
+    String(SynString),
+    Array(Array),
+    Function(Func),
+    Method(Method),
+    Struct(Struct),
+    StructAlive(StructAlive),
+    Nil,
+}
+
+#[repr(u8)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone)]
+pub enum ByteCode {
+    Push(ObjPointer),
+    Pop,
+
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Neg,
+
+    Not,
+    Equal,
+    Less,
+    Greater,
+    Or,
+    And,
+    XOR,
+    Modulo,
+    LogicalAnd,
+    LogicalOr,
+
+    Print(ArgsCounter),
+
+    GDef,
+    GGet(GlobalCounter),
+    GSet(GlobalCounter),
+    LDef,
+    LGet(LocalCounter),
+    LSet(LocalCounter),
+
+    Jump(InstPtr),
+    JumpIfFalse(InstPtr),
+    Call(ArgsCounter),
+
+    Array(usize),
+    ArrayGet,
+    ArraySet,
+
+    LStruct(LocalCounter),
+    GStruct(GlobalCounter),
+    MethodGet,
+    FieldGet,
+    FieldSet,
+    StructImpl(MethodCounter),
+
+    Assert,
+    Panic,
+
+    Ret,
+}
+
+#[allow(dead_code)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub enum Type {
+    Byte,
+    Integer,
+    Float,
+    Bool,
+    SynString,
+    Function,
+    Array,
+    Struct,
+    None,
+}
+
+type SynString = String;
+
+#[allow(dead_code)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Array {
+    pub typ: Type,
+    pub items: Vec<ObjPointer>,
+}
+
+impl PartialEq for Array {
+    fn eq(&self, other: &Array) -> bool {
+        if self.items.len() != other.items.len() {
+            return false;
+        }
+        for i in 0..self.items.len() {
+            if self.items[i] != other.items[i] {
+                return false;
+            }
+        }
+        return true;
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Func {
+    pub arity: usize,
+    pub name: String,
+    pub retype: Type,
+    pub chunk: FuncCounter,
+    pub is_method: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct Method {
+    func: ObjPointer,
+    owner: ObjPointer, // points to `self`
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub struct Struct {
+    pub name: String,
+    pub members: HashMap<String, StructMember>,
+    fields_count: usize,
+    methods_count: usize,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub struct StructAlive {
+    pub base: ObjPointer,
+    pub data: HashMap<String, ObjPointer> // TODO: have a list of pointer instead
+}
+
+pub type ObjCounter = u32;
+pub type ObjPointer = (FuncCounter, ObjCounter);
+pub type FuncCounter = u32;
+pub type ArgsCounter = u8;
+pub type LocalCounter = usize;
+pub type GlobalCounter = usize;
+pub type MethodCounter = u8;
+pub type InstPtr = usize;
+
 impl Program {
     pub fn new() -> Self {
         Self {
@@ -100,13 +257,6 @@ impl Program {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Chunk {
-    pub objs: Vec<Classifer<Object>>,
-    code: Vec<ByteCode>,
-    info: Vec<TokenHeader>, // info for code(info.len() = code.len())
-}
-
 impl Chunk {
     pub fn new() -> Self {
         Self {
@@ -155,80 +305,6 @@ impl Chunk {
     }
 }
 
-#[repr(u8)]
-#[derive(Serialize, Deserialize, Debug, Copy, Clone)]
-pub enum ByteCode {
-    Push(ObjPointer),
-    Pop,
-
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Neg,
-
-    Not,
-    Equal,
-    Less,
-    Greater,
-    Or,
-    And,
-    XOR,
-    Modulo,
-    LogicalAnd,
-    LogicalOr,
-
-    Print(ArgsCounter),
-
-    GDef,
-    GGet(GlobalCounter),
-    GSet(GlobalCounter),
-    LDef,
-    LGet(LocalCounter),
-    LSet(LocalCounter),
-
-    Jump(InstPtr),
-    JumpIfFalse(InstPtr),
-    Call(ArgsCounter),
-
-    Array(usize),
-    ArrayGet,
-    ArraySet,
-
-    LStruct(LocalCounter),
-    GStruct(GlobalCounter),
-    MethodGet,
-    FieldGet,
-    FieldSet,
-    StructImpl(MethodCounter),
-
-    Assert,
-    Panic,
-
-    Ret,
-}
-
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
-pub enum Classifer<T> {
-    Raw(T),
-    Readonly(T),
-}
-
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
-pub enum Object {
-    Byte(u8),
-    Integer(i32),
-    Float(f64),
-    Bool(bool),
-    String(String),
-    Array(Array),
-    Function(Func),
-    Method(Method),
-    Struct(Struct),
-    StructAlive(StructAlive),
-    Nil,
-}
-
 impl Object {
     fn to_bool(self) -> bool {
         match self {
@@ -262,12 +338,12 @@ impl Object {
                 let s2 = prog.get_obj(*owner).to_string(prog, tab_lvl);
                 format!("Method<{}, {}>", s1, s2)
             }
-            Object::Array(val) => {
+            Object::Array(arr) => {
                 let mut s = String::from("[");
-                for i in 0..val.items.len() {
-                    let ptr = val.items[i];
+                for i in 0..arr.items.len() {
+                    let ptr = arr.items[i];
                     let obj_str = prog.get_obj(ptr).to_string(prog, tab_lvl + 1);
-                    if i+1 < val.items.len() {
+                    if i + 1 < arr.items.len() {
                         s = format!("{}{}, ", s, obj_str);
                     } else {
                         s = format!("{}{}]", s, obj_str);
@@ -295,14 +371,6 @@ impl Object {
             }
         }
     }
-}
-
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
-pub struct Struct {
-    pub name: String,
-    pub members: HashMap<String, StructMember>,
-    fields_count: usize,
-    methods_count: usize,
 }
 
 impl Struct {
@@ -335,22 +403,6 @@ pub enum StructMember {
     Method { ptr: ObjPointer }, // points to the function
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
-pub struct StructAlive {
-    pub base: ObjPointer,
-    pub data: HashMap<String, ObjPointer> // TODO: have a list of pointer instead
-}
-
-#[allow(dead_code)]
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Func {
-    pub arity: usize,
-    pub name: String,
-    pub retype: Type,
-    pub chunk: FuncCounter,
-    pub is_method: bool,
-}
-
 impl PartialEq for Func {
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name && self.arity == other.arity && self.retype == other.retype
@@ -369,49 +421,11 @@ impl Func {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct Method {
-    func: ObjPointer,
-    owner: ObjPointer, // points to `self`
-}
-
 #[derive(Clone)]
 pub struct CallFrame {
     ip: InstPtr,
     func: Func,
     stack_offset: usize,
-}
-
-#[allow(dead_code)]
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Array {
-    pub typ: Type,
-    pub items: Vec<ObjPointer>,
-}
-
-impl PartialEq for Array {
-    fn eq(&self, other: &Self) -> bool {
-        for i in 0..other.items.len() {
-            if self.items[i] != other.items[i] {
-                return false;
-            }
-        }
-        return true;
-    }
-}
-
-#[allow(dead_code)]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub enum Type {
-    Byte,
-    Integer,
-    Float,
-    Bool,
-    String,
-    Function,
-    Array,
-    Struct,
-    None,
 }
 
 impl VM {
@@ -762,13 +776,15 @@ impl VM {
                 ByteCode::ArrayGet => {
                     let idx = self.pop_int("invalid index".into())?;
                     let ptr = self.pop();
-                    if let Object::Array(arr) = self.get_obj(ptr) {
-                        if !(0 <= idx && (idx as usize) < arr.items.len()) {
-                            return self.error("index out of bounds".into());
-                        }
-                        self.push(arr.items[idx as usize]);
-                    } else {
-                        return self.error("invalid index target".into());
+                    let obj = self.get_obj(ptr);
+                    match obj {
+                        Object::Array(arr) => {
+                            if !(0 <= idx && (idx as usize) < arr.items.len()) {
+                                return self.error("index out of bounds".into());
+                            }
+                            self.push(arr.items[idx as usize]);
+                        },
+                        _ => return self.error("invalid index target".into())
                     }
                 }
                 ByteCode::ArraySet => {
@@ -948,15 +964,6 @@ impl VM {
         Err(self.raw_error(msg))
     }
 }
-
-pub type ObjCounter = u32;
-pub type ObjPointer = (FuncCounter, ObjCounter);
-pub type FuncCounter = u32;
-pub type ArgsCounter = u8;
-pub type LocalCounter = usize;
-pub type GlobalCounter = usize;
-pub type MethodCounter = u8;
-pub type InstPtr = usize;
 
 #[derive(Debug)]
 pub struct VMError {

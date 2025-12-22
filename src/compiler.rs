@@ -584,7 +584,7 @@ impl Compiler {
             Token::IntT => Type::Integer,
             Token::FloatT => Type::Float,
             Token::BoolT => Type::Bool,
-            Token::StrT => Type::String,
+            Token::StrT => Type::SynString,
             Token::FuncT => Type::Function,
             Token::Identifer => Type::Struct, // TODO: for now
             _ => return Err(self.error("expected valid type")),

@@ -294,6 +294,13 @@ impl Lexer {
                     Token::LogicalAnd
                 }
             }
+            '%' => {
+                if self.match_char('=') {
+                    Token::PercentEqual
+                } else {
+                    Token::Percent
+                }
+            }
             '^' => {
                 if self.match_char('=') {
                     Token::CaretEqual
