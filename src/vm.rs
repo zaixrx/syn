@@ -197,7 +197,7 @@ impl<'a> VM<'a> {
                 stack_offset: 0,
                 func: Func {
                     arity: 0,
-                    name: String::new(),
+                    name: String::from("__global__"),
                     retype: Type::None,
                     chunk: 0,
                     is_method: false,
@@ -212,13 +212,17 @@ impl<'a> VM<'a> {
     #[inline]
     fn get_obj(&self, ptr: Pointer) -> &Object {
         self.arena.get_obj(ptr).
-            expect("Core not dumped ): Segmentation Vailation")
+            expect(
+                format!("{} @ {:04X}: failed to access address {:04X}", self.frame.func.name, self.frame.ip, ptr).as_str()
+            )
     }
 
     #[inline]
     fn get_obj_mut(&mut self, ptr: Pointer) -> &mut Object {
         self.arena.get_obj_mut(ptr).
-            expect("Core not dumped ): Segmentation Vailation")
+            expect(
+                format!("{} @ {:04X}: failed to mutuably access address {:04X}", self.frame.func.name, self.frame.ip, ptr).as_str()
+            )
     }
 
     #[inline]
@@ -233,7 +237,7 @@ impl<'a> VM<'a> {
 
     #[inline]
     fn stack_pop(&mut self) -> Pointer {
-        self.stack.pop().expect("stack smashing detected")
+        self.stack.pop().expect(format!("{} @ {:04X} ~ stack smashing detected", self.frame.func.name, self.frame.ip).as_str())
     }
 
     #[inline]
@@ -413,10 +417,11 @@ impl<'a> VM<'a> {
                     };
                 }
                 ByteCode::Print(count) => {
-                    (0..count).for_each(|_| {
+                    let mut vec = (0..count).map(|_| {
                         let obj = self.stack_pop_obj();
-                        println!("{}", self.obj_to_str(&obj));
-                    });
+                        self.obj_to_str(&obj)
+                    }).collect::<Vec<String>>(); vec.reverse();
+                    println!("{}", vec.join(""));
                 }
                 ByteCode::Neg => {
                     let obj = match self.stack_pop_obj() {
@@ -703,10 +708,13 @@ impl<'a> VM<'a> {
 impl<'a> VM<'a> {
     #[allow(unused)]
     pub fn disassemble_chunk(&self, chunk: FuncCounter) {
-        println!("Chunk {chunk}:");
+        println!("===== Chunk {chunk:04X} =====");
         let chunk = &self.prog.chunks[chunk];
         for (ip, bytecode) in chunk.code.iter().enumerate() {
-            println!("{ip}: {bytecode:?}");
+            match bytecode {
+                ByteCode::Push(ptr) => println!("{ip:04X}: Push({ptr}) <--- {}", self.obj_to_str(self.get_obj(*ptr))),
+                _ => println!("{ip:04X}: {bytecode:?}"),
+            };
         }
     }
 
@@ -738,17 +746,14 @@ impl<'a> VM<'a> {
                 format!("Func<{}>", val.name)
             }
             Object::Method(Method { func, owner }) => {
-                let func = self.arena.get_obj(*func)
-                        .expect("Core not dumped ): Segmentation Vailation");
-                let owner = self.arena.get_obj(*owner)
-                        .expect("Core not dumped ): Segmentation Vailation");
+                let func = self.get_obj(*func);
+                let owner = self.get_obj(*owner);
                 format!("Method<{}, {}>", self.obj_to_str(func), self.obj_to_str(owner))
             }
             Object::Array(arr) => {
                 let mut s = String::from("[");
                 for i in 0..arr.len {
-                    let obj = self.arena.get_obj(arr.base + i)
-                        .expect("Core not dumped ): Segmentation Vailation");
+                    let obj = self.get_obj(arr.base + i);
                     if i + 1 < arr.len {
                         s = format!("{}{}, ", s, self.obj_to_str(obj));
                     } else {
@@ -761,13 +766,11 @@ impl<'a> VM<'a> {
                 format!("Struct<{}>", typ.name)
             }
             Object::StructAlive(instance) => {
-                let base_obj = self.arena.get_obj(instance.base)
-                        .expect("Core not dumped ): Segmentation Vailation");
+                let base_obj = self.get_obj(instance.base);
                 if let Object::Struct(base) = base_obj {
                     let mut s = format!("{} {{ ", base.name);
                     for (key, ptr) in &instance.data {
-                        let val = self.arena.get_obj(*ptr)
-                            .expect("Core not dumped ): Segmentation Vailation");
+                        let val = self.get_obj(*ptr);
                         let field_str = format!("{}: {}, ", key, self.obj_to_str(val));
                         s.push_str(field_str.as_str())
                     }

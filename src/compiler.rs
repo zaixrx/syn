@@ -578,7 +578,8 @@ impl<'a> Compiler<'a> {
                 self.push_global(Some(TypeInfo::Struct(le_struct.clone())))?;
                 ByteCode::GDef
             };
-            self.load_readonly_obj(Object::Struct(le_struct));
+            // self.load_readonly_obj(Object::Struct(le_struct));
+            self.load_runtime_obj(Object::Struct(le_struct));
             self.push_bytecode(byte)?;
         }
         self.curr = temp;
@@ -1090,8 +1091,12 @@ impl<'a> Compiler<'a> {
         Ok(self.prog.chunks[self.chunk.unwrap() as usize].count())
     }
 
+    #[allow(dead_code)]
     fn load_readonly_obj(&mut self, obj: Object) -> Pointer {
-        self.arena.push_obj(Classifier::Readonly(obj))
+        let chunk = &mut self.prog.chunks[self.chunk.unwrap_or(0)];
+        let ptr = self.arena.push_obj(Classifier::Readonly(obj));
+        chunk.push_instruction(ByteCode::Push(ptr), self.curr.clone());
+        return ptr;
     }
 
     #[inline]

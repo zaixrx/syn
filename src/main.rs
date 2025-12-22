@@ -20,10 +20,10 @@ struct Args {
     
     // TODO: handle cache invalidtion
     // make sure that cache maps to the right TU
-    #[arg(short, long, default_value="true")]
+    #[arg(short, long, default_value="false")]
     load_cache: bool,
 
-    #[arg(short, long, default_value="true")]
+    #[arg(short, long, default_value="false")]
     write_cache: bool,
 }
 
