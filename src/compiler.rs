@@ -124,7 +124,7 @@ impl<'a> Compiler<'a> {
             arena,
         }
     }
- 
+
     pub fn compile<F>(mut self, mut report: F) -> Option<Program> 
     where
         F: FnMut(CompilerError),
@@ -469,7 +469,10 @@ impl<'a> Compiler<'a> {
 
     fn compile_method(&mut self) -> Result<Pointer, CompilerError> {
         self.expect(Token::Identifer, "expected the method's name")?;
-        let func = self.compile_func_body(self.curr.lexm.clone())?;
+        let src = self.curr.lexm.clone();
+        let synstr = self.arena.str_to_synstr(src.clone());
+        self.load_runtime_obj(Object::SynString(synstr));
+        let func = self.compile_func_body(src)?;
         Ok(self.load_runtime_obj(Object::Function(func)))
     }
 
@@ -560,8 +563,9 @@ impl<'a> Compiler<'a> {
             while !self.check_with_eof(Token::RightBrace)? {
                 self.expect(Token::Identifer, "expected struct member name")?;
                 let field_name = self.curr.lexm.clone();
+                let synstr = self.arena.str_to_synstr(field_name);
                 self.expect(Token::Colon, "expected ':' as a type seperator")?;
-                le_struct.add_member(field_name, StructMember::Field{typ: self.compile_type()?});
+                le_struct.add_member(synstr.base, StructMember::Field{typ: self.compile_type()?});
                 self.check(Token::Comma)?;
             }
             if self.curr.tokn != Token::RightBrace {
@@ -736,7 +740,8 @@ impl<'a> Compiler<'a> {
                 Err(msg) => return Err(self.error(msg))
             };
             if buf.len() > 0 {
-                self.load_runtime_obj(Object::String(buf));
+                let synstr = self.arena.str_to_synstr(buf);
+                self.load_runtime_obj(Object::SynString(synstr));
                 count += 1;
             }
             if is_end {
@@ -774,7 +779,9 @@ impl<'a> Compiler<'a> {
                 self.load_runtime_obj(Object::Bool(val))
             },
             Token::String => {
-                self.load_runtime_obj(Object::String(self.curr.lexm.clone()))
+                let src = self.curr.lexm.clone();
+                let synstr = self.arena.str_to_synstr(src);
+                self.load_runtime_obj(Object::SynString(synstr))
             }
             Token::Nil => self.load_runtime_obj(Object::Nil),
             _ => panic!("Compiler::literal ~ unhandled literal {:?}", self.curr),
@@ -865,18 +872,19 @@ impl<'a> Compiler<'a> {
                     let mut set = HashSet::new();
                     for _ in 0..base.members.len() {
                         self.expect(Token::Identifer, "expected member name")?;
-                        if base.members.get(&self.curr.lexm).is_none() {
+                        let name = self.curr.lexm.clone();
+                        let synstr = self.arena.str_to_synstr(name);
+                        if base.members.get(&synstr.base).is_none() {
                             return Err(self.error("undefined member in struct"));
                         }
-                        if set.contains(&self.curr.lexm) {
+                        if set.contains(&synstr.base) {
                             return Err(self.error("already defined field"));
                         } 
-                        let name = self.curr.lexm.clone();
                         self.expect(Token::Colon, "expected ':'")?;
                         self.expression()?;
                         self.check(Token::Comma)?;
-                        self.load_runtime_obj(Object::String(name.clone()));
-                        set.insert(name);
+                        set.insert(synstr.base);
+                        self.load_runtime_obj(Object::SynString(synstr));
                     }
                     self.expect(Token::RightBrace, "expected '}'")?;
                     self.push_bytecode(ByteCode::LStruct(idx))?;
@@ -897,7 +905,8 @@ impl<'a> Compiler<'a> {
                         for _ in 0..base.members.len() {
                             self.expect(Token::Identifer, "expected member name")?;
                             let name = self.curr.lexm.clone();
-                            if base.members.get(&name).is_none() {
+                            let synstr = self.arena.str_to_synstr(name.clone());
+                            if base.members.get(&synstr.base).is_none() {
                                 return Err(self.error("undefined member in struct"));
                             }
                             if set.contains(&name) {
@@ -907,7 +916,7 @@ impl<'a> Compiler<'a> {
                             self.expression()?;
                             self.check(Token::Comma)?;
                             set.insert(name.clone());
-                            self.load_runtime_obj(Object::String(name));
+                            self.load_runtime_obj(Object::SynString(synstr));
                         }
                         self.expect(Token::RightBrace, "expected '}'")?;
                         self.push_bytecode(ByteCode::GStruct(idx))?;
@@ -943,14 +952,18 @@ impl<'a> Compiler<'a> {
     // NOTE: for now it's only specific to `static` methods
     fn method(&mut self, _: bool) -> Result<(), CompilerError> {
         self.expect(Token::Identifer, "exepeted method name")?;
-        self.load_runtime_obj(Object::String(self.curr.lexm.clone()));
+        let src = self.curr.lexm.clone();
+        let synstr = self.arena.str_to_synstr(src);
+        self.load_runtime_obj(Object::SynString(synstr));
         self.push_bytecode(ByteCode::MethodGet)?;
         Ok(())
     }
 
     fn field(&mut self, can_assign: bool) -> Result<(), CompilerError> {
         self.expect(Token::Identifer, "exepeted field name")?;
-        self.load_runtime_obj(Object::String(self.curr.lexm.clone()));
+        let src = self.curr.lexm.clone();
+        let synstr = self.arena.str_to_synstr(src);
+        self.load_runtime_obj(Object::SynString(synstr));
         if can_assign && self.check_for_assign()? {
             self.push_bytecode(ByteCode::FieldSet)?;
         } else {

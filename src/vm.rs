@@ -47,7 +47,7 @@ pub enum Object {
     Integer(i32),
     Float(f64),
     Bool(bool),
-    String(SynString),
+    SynString(SynString), // runtime string
     Array(Array),
     Function(Func),
     Method(Method),
@@ -123,8 +123,6 @@ pub enum Type {
     None,
 }
 
-type SynString = String;
-
 #[allow(dead_code)]
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Array {
@@ -137,6 +135,8 @@ impl PartialEq for Array {
         return self.len == other.len; // TODO: fix this
     }
 }
+
+pub type SynString = Array;
 
 #[allow(dead_code)]
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -163,7 +163,7 @@ pub struct Method {
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct Struct {
     pub name: String,
-    pub members: HashMap<String, StructMember>,
+    pub members: HashMap<Pointer, StructMember>,
     fields_count: usize,
     methods_count: usize,
 }
@@ -177,7 +177,7 @@ pub enum StructMember {
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct StructAlive {
     pub base: Pointer,
-    pub data: HashMap<String, Pointer> // TODO: have a list of pointer instead
+    pub data: HashMap<Pointer, Pointer> // TODO: have a list of pointer instead
 }
 
 pub type FuncCounter = usize;
@@ -211,18 +211,25 @@ impl<'a> VM<'a> {
 
     #[inline]
     fn get_obj(&self, ptr: Pointer) -> &Object {
-        self.arena.get_obj(ptr).
+        match self.arena.get_obj(ptr).
             expect(
-                format!("{} @ {:04X}: failed to access address {:04X}", self.frame.func.name, self.frame.ip, ptr).as_str()
-            )
+                format!("{} @ {:04}: failed to access address {:04}", self.frame.func.name, self.frame.ip, ptr).as_str()
+            ) {
+            Classifier::Runtime(obj) => obj,
+            Classifier::Readonly(obj) => obj
+        }
     }
 
     #[inline]
     fn get_obj_mut(&mut self, ptr: Pointer) -> &mut Object {
-        self.arena.get_obj_mut(ptr).
-            expect(
-                format!("{} @ {:04X}: failed to mutuably access address {:04X}", self.frame.func.name, self.frame.ip, ptr).as_str()
-            )
+        self.arena.get_obj_mut(ptr).and_then(|wrapped| {
+            match wrapped {
+                Classifier::Runtime(obj) => Some(obj),
+                _ => None
+            }
+        }).expect(
+            format!("{} @ {:04}: failed to mutably access address {:04}", self.frame.func.name, self.frame.ip, ptr).as_str()
+        )
     }
 
     #[inline]
@@ -237,7 +244,7 @@ impl<'a> VM<'a> {
 
     #[inline]
     fn stack_pop(&mut self) -> Pointer {
-        self.stack.pop().expect(format!("{} @ {:04X} ~ stack smashing detected", self.frame.func.name, self.frame.ip).as_str())
+        self.stack.pop().expect(format!("{} @ {:04} ~ stack smashing detected", self.frame.func.name, self.frame.ip).as_str())
     }
 
     #[inline]
@@ -404,14 +411,15 @@ impl<'a> VM<'a> {
                             _ => return self.error("invalid opreator on byte".into())
                         };
                         self.stack_push_runtime_obj(obj);
-                    } else if let Object::String(x) = x && let Object::String(y) = y {
-                        let obj = match bytecode {
+                    } else if let Object::SynString(x) = x && let Object::SynString(y) = y {
+                        match bytecode {
                             ByteCode::Add => {
-                                Object::String(String::from(x + y.as_str()))
+                                let x = self.arena.get_objs(x.base, x.len).unwrap();
+                                let y = self.arena.get_objs(y.base, y.len).unwrap();
+                                self.arena.push_objs(x.chain(y).collect());
                             }
                             _ => return self.error("invalid operator on strings".into())
                         };
-                        self.stack_push_runtime_obj(obj);
                     } else {
                         return self.error(format!("invalid operands for {bytecode:?}"));
                     };
@@ -537,10 +545,10 @@ impl<'a> VM<'a> {
                     let obj = Object::Array(Array { len, base });
                     self.stack_push_runtime_obj(obj);
                 }
-                // TODO: push array at compile-time
                 ByteCode::ArrayGet => {
                     let idx_obj = self.stack_pop_obj();
                     match self.stack_pop_obj() {
+                        Object::SynString(arr) |
                         Object::Array(arr) => {
                             let idx = match idx_obj {
                                 Object::Byte(idx) => idx as isize,
@@ -559,6 +567,7 @@ impl<'a> VM<'a> {
                     let val = self.stack_pop();
                     let idx_obj = self.stack_pop_obj();
                     match self.stack_pop_obj() {
+                        Object::SynString(arr) |
                         Object::Array(arr) => {
                             let idx = match idx_obj {
                                 Object::Byte(idx) => idx as isize,
@@ -582,8 +591,9 @@ impl<'a> VM<'a> {
                     };
                     let mut data = HashMap::new();
                     for _ in 0..base.fields_count {
-                        if let Object::String(k) = self.stack_pop_obj() {
-                            data.insert(k, self.stack_pop());
+                        let key_ptr = self.stack_pop();
+                        if let Object::SynString(ss) = self.get_obj(key_ptr) {
+                            data.insert(ss.base, self.stack_pop());
                         } else {
                             panic!("vm::VM::exec @ match arm ByteCode::LStruct: invalid value kind")
                         }
@@ -599,8 +609,9 @@ impl<'a> VM<'a> {
                     };
                     let mut data = HashMap::new();
                     for _ in 0..base.fields_count {
-                        if let Object::String(k) = self.stack_pop_obj() {
-                            data.insert(k, self.stack_pop());
+                        let key_ptr = self.stack_pop();
+                        if let Object::SynString(ss) = self.get_obj(key_ptr) {
+                            data.insert(ss.base, self.stack_pop());
                         } else {
                             panic!("vm::VM::exec @ match arm ByteCode::GStruct: invalid value kind")
                         }
@@ -610,11 +621,11 @@ impl<'a> VM<'a> {
                 }
                 ByteCode::MethodGet => {
                     let method_name = match self.stack_pop_obj() {
-                        Object::String(name) => name,
-                        _ => panic!("vm::VM::exec @ match arm ByteCode::MethodGet: invalid method name")
+                        Object::SynString(ss) => ss,
+                        _ => panic!("vm::VM::exec @ match arm ByteCode::MethodGet: invalid method name."),
                     };
                     if let Object::Struct(base) = self.stack_pop_obj() {
-                        if let Some(StructMember::Method { ptr }) = base.members.get(&method_name) { 
+                        if let Some(StructMember::Method { ptr }) = base.members.get(&method_name.base) { 
                             self.stack_push(*ptr);
                         } else {
                             return self.error(format!("invalid method reference in `struct {}`", base.name));
@@ -625,13 +636,13 @@ impl<'a> VM<'a> {
                 }
                 ByteCode::FieldGet => {
                     let field_name = match self.stack_pop_obj() {
-                        Object::String(name) => name,
-                        _ => panic!("vm::VM::exec: match arm ByteCode::FieldGet ~ invalid field name")
+                        Object::SynString(s) => s,
+                        _ => panic!("vm::VM::exec @ match arm ByteCode::FieldGet: invalid field name")
                     };
                     let struct_ptr = self.stack_pop();
                     if let Object::StructAlive(le_struct) = self.get_obj(struct_ptr) {
                         // if it's a field
-                        if let Some(field_ptr) = le_struct.data.get(&field_name) {
+                        if let Some(field_ptr) = le_struct.data.get(&field_name.base) {
                             self.stack_push(*field_ptr);
                         } else {
                             // else if it's a method
@@ -639,14 +650,14 @@ impl<'a> VM<'a> {
                                 Object::Struct(le_base) => le_base,
                                 _ => panic!("vm::VM::exec @ match arm ByteCode::FieldGet: invalid struct base")
                             };
-                            if let Some(StructMember::Method { ptr }) = le_base.members.get(&field_name) {
+                            if let Some(StructMember::Method { ptr }) = le_base.members.get(&field_name.base) {
                                 let method = Method {
                                     owner: struct_ptr,
                                     func: *ptr,
                                 };
                                 self.stack_push_runtime_obj(Object::Method(method));
                             } else {
-                                return self.error(format!("field {field_name} doesn't exist"));
+                                return self.error(format!("no field {} on struct instance", self.get_str(&field_name)));
                             }
                         }
                     }
@@ -654,18 +665,18 @@ impl<'a> VM<'a> {
                 ByteCode::FieldSet => {
                     let val_set = self.stack_pop();
                     let field_name = match self.stack_pop_obj() {
-                        Object::String(name) => name,
-                        _ => panic!("vm::VM::exec: match arm ByteCode::FieldSet")
+                        Object::SynString(s) => s,
+                        _ => panic!("vm::VM::exec @ match arm ByteCode::FieldSet: invalid field name")
                     };
                     let struct_ptr = self.stack_pop();
                     if let Object::StructAlive(instance) = self.get_obj_mut(struct_ptr) {
-                        if let Some(field) = instance.data.get_mut(&field_name) {
+                        if let Some(field) = instance.data.get_mut(&field_name.base) {
                             *field = val_set;
                         } else {
-                            return self.error(format!("no field {field_name} on struct instance"));
+                            return self.error(format!("no field {} on struct instance", self.get_str(&field_name)));
                         }
                     } else {
-                        panic!("vm::VM::exec: match arm ByteCode::FieldSet.");
+                        panic!("vm::VM::exec @ match arm ByteCode::FieldSet: invalid struct pointer.");
                     }
                     self.stack_push(val_set);
                 }
@@ -673,12 +684,12 @@ impl<'a> VM<'a> {
                     let base_ptr = self.stack_pop();
                     for _ in 0..methods_count {
                         let method_ptr = self.stack_pop();
-                        let method_name = match self.get_obj(method_ptr) {
-                            Object::Function(le_method) => le_method.name.clone(),
-                            _ => unreachable!()
+                        let method_name = match self.stack_pop_obj() {
+                            Object::SynString(ss) => ss,
+                            _ => panic!("vm::VM::exec @ match arm ByteCode::FieldSet: invalid method name.")
                         };
                         if let Object::Struct(base) = self.get_obj_mut(base_ptr) {
-                            base.add_member(method_name, StructMember::Method { ptr: method_ptr });
+                            base.add_member(method_name.base, StructMember::Method { ptr: method_ptr });
                         } else {
                             panic!("vm::VM::exec: match arm ByteCode::StructImpl.");
                         }
@@ -708,12 +719,12 @@ impl<'a> VM<'a> {
 impl<'a> VM<'a> {
     #[allow(unused)]
     pub fn disassemble_chunk(&self, chunk: FuncCounter) {
-        println!("===== Chunk {chunk:04X} =====");
+        println!("===== Chunk {chunk:04} =====");
         let chunk = &self.prog.chunks[chunk];
         for (ip, bytecode) in chunk.code.iter().enumerate() {
             match bytecode {
-                ByteCode::Push(ptr) => println!("{ip:04X}: Push({ptr}) <--- {}", self.obj_to_str(self.get_obj(*ptr))),
-                _ => println!("{ip:04X}: {bytecode:?}"),
+                ByteCode::Push(ptr) => println!("{ip:04}: Push({ptr}) <--- {}", self.obj_to_str(self.get_obj(*ptr))),
+                _ => println!("{ip:04}: {bytecode:?}"),
             };
         }
     }
@@ -723,6 +734,23 @@ impl<'a> VM<'a> {
             self.disassemble_chunk(chunk);
             println!();
         }
+    }
+
+    fn get_str(&self, s: &SynString) -> String {
+        let slice = self.arena.get_objs(s.base, s.len).expect(
+            format!("{} @ {:04}: failed to access address {:04}", self.frame.func.name, self.frame.ip, s.base).as_str()
+        ).map(|wrapped| {
+            let obj = match wrapped {
+                Classifier::Runtime(obj) => obj,
+                Classifier::Readonly(obj) => obj,
+            };
+            if let Object::Byte(byte) = obj {
+                byte
+            } else {
+                panic!("vm::VM::get_str: expected valid string")
+            }
+        }).collect::<Vec<_>>();
+        str::from_utf8(&slice).unwrap().to_string()
     }
 
     fn obj_to_str(&self, obj: &Object) -> String {
@@ -739,8 +767,8 @@ impl<'a> VM<'a> {
             Object::Bool(val) => {
                 val.to_string()
             }
-            Object::String(val) => {
-                val.to_string()
+            Object::SynString(val) => {
+                self.get_str(&val)
             }
             Object::Function(val) => {
                 format!("Func<{}>", val.name)
@@ -865,7 +893,7 @@ impl Struct {
         }
     }
 
-    pub fn add_member(&mut self, name: String, member: StructMember) {
+    pub fn add_member(&mut self, name: Pointer, member: StructMember) {
         match member {
             StructMember::Field { .. } => {
                 self.fields_count += 1;
